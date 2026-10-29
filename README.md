@@ -52,3 +52,11 @@ key 继续由本地规则生成，未知文案提供稳定备用 key 并允许�
 ZTAITrans 使用现有授权额度；附件文档没有承诺免费或永久免费。备用客户端最长等待约 10 分钟，服务端固定 fast，不自动升级档位。单段最多 50,000 个字符、请求体 256 KiB；超过限制需在导入预览中拆分。单条响应实测可能把业务 ID 回显为 "1"，仅在原文完全一致时兼容，其他错配继续拒绝。
 
 仓库及本地交付包均不包含实际密钥；部署使用 Sites 的秘密环境变量。
+
+## Flutter 多端版本
+
+Flutter 工程位于 [`flutter_app/`](flutter_app/README.md)，覆盖 iOS、Android、桌面（Windows / macOS / Linux）与 Web，共用文本输入、文档导入、语言多选、真实翻译、校对与 JSON / ZIP 导出流程。原版 `web/` 和现有服务端代理保留。
+
+使用 Flutter 3.35.7 / Dart 3.9.2，在 `flutter_app/` 执行 `flutter pub get`、`flutter analyze`、`flutter test`。完整 Web 流程先执行 `flutter build web --release`，再到仓库根目录运行 `node scripts/flutter-server.mjs`，打开 `http://127.0.0.1:4180`。备用密钥仅由服务端环境变量 `TRANSLATION_API_KEY` 注入，Web 与代理同源；原生端通过设置或 `--dart-define=API_BASE_URL=https://你的服务域名` 指定自有代理。
+
+Flutter 各端本地数据与原版浏览器数据分别保存，没有账户或云同步；旧版原文需重新导入。平台启动、调试地址、签名、真实 API 验收和 CI 边界详见 [Flutter 使用说明](flutter_app/README.md)。`.github/workflows/flutter.yml` 是待执行的多平台检查配置，不能据此宣称所有平台已构建或发布。

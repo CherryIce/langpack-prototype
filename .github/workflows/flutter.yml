@@ -66,6 +66,9 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
+        with:
+          # The action defaults to legacy "tools", which Google no longer serves.
+          packages: platform-tools
       - name: Install Android build SDK
         run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
       - uses: subosito/flutter-action@v2

@@ -11,6 +11,7 @@ class ControlledTranslator extends TranslationService {
   final requests = <Completer<TranslationResult>>[];
   final sources = <String>[];
   final locales = <String>[];
+  final bypasses = <bool>[];
   @override
   Future<TranslationResult> translate(
     String source,
@@ -23,6 +24,7 @@ class ControlledTranslator extends TranslationService {
   }) {
     sources.add(source);
     locales.add(locale);
+    bypasses.add(bypassCache);
     final request = Completer<TranslationResult>();
     requests.add(request);
     return request.future;
@@ -103,6 +105,247 @@ void main() {
     expect(translator.requests, isEmpty);
     expect(entry.value('en').reviewed, isTrue);
   });
+
+  test(
+    'same-batch duplicates use one request and keep independent values',
+    () async {
+      controller.addBlocks([DocumentBlock('登录'), DocumentBlock('登录')]);
+      final plan = controller.incrementalPlan();
+      expect(plan.pending, 3);
+      expect(plan.uniquePending, 1);
+      final task = controller.startTranslation();
+      translator.complete(0, 'Login');
+      await task;
+      expect(translator.sources, ['登录']);
+      expect(controller.reused, 2);
+      expect(project.jobs.single.reused, 2);
+      expect(
+        project.entries.map((e) => e.value('en').text),
+        everyElement('Login'),
+      );
+      controller.editTranslation(project.entries[1], 'en', 'Sign in');
+      expect(project.entries.first.value('en').text, 'Login');
+      expect(project.entries.last.value('en').text, 'Login');
+    },
+  );
+
+  test(
+    'repeat import and key edits reuse only the existing language',
+    () async {
+      final first = controller.startTranslation();
+      translator.complete(0, 'Login');
+      await first;
+      controller.addBlocks([DocumentBlock('登录')]);
+      controller.updateEntryKey(project.entries.last, 'other_context_key');
+      expect(controller.incrementalPlan().reusable, 1);
+      await controller.startTranslation();
+      expect(translator.sources, ['登录']);
+      controller.setLocales(['en', 'ja']);
+      final next = controller.startTranslation();
+      expect(translator.locales, ['en', 'ja']);
+      translator.complete(1, 'ログイン');
+      await next;
+      expect(translator.sources, ['登录', '登录']);
+      expect(project.entries.last.value('ja').text, 'ログイン');
+      controller.updateEntrySource(project.entries.last, '退出登录');
+      controller.setLocales(['en']);
+      final changed = controller.startTranslation();
+      expect(translator.sources.last, '退出登录');
+      translator.complete(2, 'Log out');
+      await changed;
+      expect(project.entries.first.value('en').text, 'Login');
+    },
+  );
+
+  test(
+    'project translation reuse survives restart without service cache',
+    () async {
+      final first = controller.startTranslation();
+      translator.complete(0, 'Login');
+      await first;
+      await controller.flush();
+      final freshTranslator = ControlledTranslator();
+      final restored = AppController(translator: freshTranslator);
+      await restored.initialize();
+      restored.openProject(project.id);
+      restored.addBlocks([DocumentBlock('登录')]);
+      await restored.startTranslation();
+      expect(freshTranslator.requests, isEmpty);
+      expect(restored.currentProject!.entries.last.value('en').text, 'Login');
+      expect(restored.currentProject!.jobs.first.reused, 1);
+      restored.dispose();
+    },
+  );
+
+  test('project reuse excludes edited results and other projects', () async {
+    controller.editTranslation(project.entries.single, 'en', 'Sign in');
+    controller.reviewTranslation(project.entries.single, 'en', true);
+    controller.addBlocks([DocumentBlock('登录')]);
+    final task = controller.startTranslation();
+    expect(translator.sources, ['登录']);
+    translator.complete(0, 'Login');
+    await task;
+    expect(project.entries.first.value('en').text, 'Sign in');
+    expect(project.entries.first.value('en').reviewed, isTrue);
+    controller.createProject('Other');
+    controller.setLocales(['en']);
+    controller.addBlocks([DocumentBlock('登录')]);
+    final other = controller.startTranslation();
+    expect(translator.requests.length, 2);
+    translator.complete(1, 'Log in');
+    await other;
+  });
+
+  test(
+    'explicit retranslation bypasses project reuse and service cache',
+    () async {
+      final first = controller.startTranslation();
+      translator.complete(0, 'Login');
+      await first;
+      controller.addBlocks([DocumentBlock('登录')]);
+      final forced = controller.startTranslation(
+        entryId: project.entries.last.id,
+        locale: 'en',
+        overwrite: true,
+      );
+      expect(translator.sources, ['登录', '登录']);
+      expect(translator.bypasses.last, isTrue);
+      translator.complete(1, 'Sign in');
+      await forced;
+      expect(controller.reused, 0);
+      expect(project.entries.last.value('en').text, 'Sign in');
+    },
+  );
+
+  test(
+    'a donor edited after completion is excluded from same-batch reuse',
+    () async {
+      controller.addBlocks([DocumentBlock('登录')]);
+      var edited = false;
+      void editCompleted() {
+        if (!edited &&
+            project.entries.first.value('en').status ==
+                TranslationStatus.done) {
+          edited = true;
+          controller.editTranslation(project.entries.first, 'en', 'Sign in');
+        }
+      }
+
+      controller.addListener(editCompleted);
+      final task = controller.startTranslation();
+      translator.complete(0, 'Login');
+      await Future<void>.delayed(Duration.zero);
+      expect(translator.sources, ['登录', '登录']);
+      translator.complete(1, 'Log in');
+      await task;
+      controller.removeListener(editCompleted);
+      expect(project.entries.first.value('en').text, 'Sign in');
+      expect(project.entries.last.value('en').text, 'Log in');
+      expect(controller.reused, 0);
+    },
+  );
+
+  test(
+    'reviewed machine results copy unreviewed and exact source matching is required',
+    () async {
+      final first = controller.startTranslation();
+      translator.complete(0, 'Login');
+      await first;
+      controller.reviewTranslation(project.entries.first, 'en', true);
+      controller.addBlocks([DocumentBlock('登录')]);
+      await controller.startTranslation();
+      expect(project.entries.last.value('en').text, 'Login');
+      expect(project.entries.last.value('en').reviewed, isFalse);
+      expect(project.entries.first.value('en').reviewed, isTrue);
+      controller.updateEntrySource(project.entries.last, '登录 ');
+      expect(controller.incrementalPlan().reusable, 0);
+      expect(controller.incrementalPlan().uniquePending, 1);
+    },
+  );
+
+  test(
+    'conflicting machine translations request once for new batch duplicates',
+    () async {
+      controller.addBlocks([
+        DocumentBlock('登录'),
+        DocumentBlock('登录'),
+        DocumentBlock('登录'),
+      ]);
+      for (var i = 0; i < 2; i++) {
+        final entry = project.entries[i];
+        entry.value('en')
+          ..text = i == 0 ? 'Login' : 'Sign in'
+          ..provider = 'MyMemory'
+          ..status = TranslationStatus.done
+          ..sourceText = entry.source
+          ..sourceRevision = entry.sourceRevision;
+      }
+      expect(controller.incrementalPlan().reusable, 0);
+      final task = controller.startTranslation();
+      expect(translator.sources, ['登录']);
+      translator.complete(0, 'Log in');
+      await task;
+      expect(translator.sources, ['登录']);
+      expect(project.entries.last.value('en').text, 'Log in');
+      expect(controller.reused, 1);
+      controller.addBlocks([DocumentBlock('登录')]);
+      expect(controller.incrementalPlan().reusable, 0);
+    },
+  );
+
+  test(
+    'stale source provenance and invalid placeholders never enter memory',
+    () async {
+      controller.updateEntrySource(project.entries.single, '欢迎 {name}');
+      final original = project.entries.single;
+      original.value('en')
+        ..text = 'Welcome'
+        ..provider = 'MyMemory'
+        ..status = TranslationStatus.done
+        ..sourceText = original.source
+        ..sourceRevision = original.sourceRevision;
+      controller.addBlocks([DocumentBlock(original.source)]);
+      expect(controller.incrementalPlan().reusable, 0);
+      original.value('en')
+        ..text = 'Welcome {name}'
+        ..sourceRevision = -1;
+      expect(controller.incrementalPlan().reusable, 0);
+      original.value('en')
+        ..sourceRevision = original.sourceRevision
+        ..sourceText = '其他原文';
+      expect(controller.incrementalPlan().reusable, 0);
+      original.value('en')
+        ..sourceText = original.source
+        ..sourceRevision = null;
+      expect(controller.incrementalPlan().reusable, 0);
+    },
+  );
+
+  test(
+    'legacy persisted machine values migrate only when both bindings absent',
+    () async {
+      final entry = Entry.fromJson({
+        'source': '登录',
+        'key': 'login',
+        'translations': {
+          'en': {'text': 'Login', 'provider': 'MyMemory', 'status': 'done'},
+        },
+      });
+      project.entries[0] = entry;
+      controller.addBlocks([DocumentBlock('登录')]);
+      await controller.startTranslation();
+      expect(translator.requests, isEmpty);
+      expect(project.entries.last.value('en').text, 'Login');
+      final partial = entry.toJson();
+      final values = partial['translations'] as Map<String, dynamic>;
+      (values['en'] as Map<String, dynamic>)['sourceRevision'] = null;
+      project.entries
+        ..clear()
+        ..add(Entry.fromJson(partial));
+      controller.addBlocks([DocumentBlock('登录')]);
+      expect(controller.incrementalPlan().reusable, 0);
+    },
+  );
 
   test('failed-only retry skips successful translation', () async {
     controller.addBlocks([DocumentBlock('注册')]);

@@ -178,7 +178,7 @@ void main() {
     await _tap(tester, find.text('下一步：选择语言'));
     expect(controller.currentProject!.entries.length, 2);
     expect(find.text('为你的内容，选择目的地'), findsOneWidget);
-    await _tap(tester, find.text('开始翻译'));
+    await _tap(tester, find.text('开始增量翻译'));
     expect(controller.running, isFalse);
     expect(controller.currentProject!.translatedCount, 4);
     await _tap(tester, find.text('进入翻译校对'));

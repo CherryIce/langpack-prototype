@@ -71,6 +71,7 @@ function boot(saved, translate = async () => { throw new Error('Unexpected trans
     },
     field(id, value) { const target = document.querySelector('#' + id); assert.ok(target, 'Visible field ' + id); target.value = value; return target; },
     async input(id, value) { const target = this.field(id, value); for (const handler of handlers.get('input') || []) await handler({ target }); },
+    async editDocumentSource(index, value) { const target = { value, dataset: { docSource: String(index) } }; for (const handler of handlers.get('input') || []) await handler({ target }); },
     close() { for (const timer of timers) clearTimeout(timer); },
     engine: context.LangPackEngine
   };
@@ -260,4 +261,74 @@ test('fatal backup authorization failure stops the app job and does not show the
   assert.equal(state.projects[0].entries[0].translations.en, undefined);
   assert.match(app.html(), /备用翻译服务暂不可用/); assert.doesNotMatch(app.html(), /今日免费额度已用完/);
   assert.deepEqual(app.errors, []);
+});
+
+test('the actual app plans reimports incrementally, persists reused results and makes no calls after reopening', async t => {
+  const saved = fixture(['en', 'ja']);
+  const old = saved.projects[0].entries[0];
+  old.translations.en = 'Log in'; old.translationMeta = { en: { provider: 'ZTAITrans', status: 'success', sourceText: old.source, sourceVersion: 1 } };
+  old.reviewed.en = true;
+  saved.session.entries = [makeEntry('copy'), makeEntry('new', '新增文案'), makeEntry('duplicate', '新增文案')];
+  const calls = [];
+  const app = boot(saved, async (source, locale) => { calls.push([source, locale]); return { text: locale + ':' + source, provider: 'MyMemory', requestCount: 1 }; });
+  t.after(() => app.close());
+  assert.match(app.html(), /复用已有译文<\/span><strong>1 条/);
+  assert.match(app.html(), /合并重复原文<\/span><strong>2 条/);
+  assert.match(app.html(), /本次增量待译<\/span><strong>3</);
+  await app.click('start-translation'); await until(() => app.state().session.status === 'completed');
+  assert.deepEqual(calls, [['新增文案', 'en'], ['登录', 'ja'], ['新增文案', 'ja']]);
+  const state = app.state();
+  assert.equal(state.session.entries[0].translations.en, 'Log in');
+  assert.equal(state.session.entries[0].translationMeta.en.provider, 'ZTAITrans');
+  assert.equal(state.session.entries[0].reviewed.en, false);
+  assert.equal(state.jobs[0].items.filter(item => item.reused).length, 3);
+  assert.match(app.html(), /复用 3/);
+  state.session.entries = [makeEntry('another-copy')]; state.session.locales = ['en']; state.view = 'languages'; state.session.status = 'draft'; delete state.session.jobId;
+  const reopened = boot(state); t.after(() => reopened.close());
+  assert.match(reopened.html(), /复用译文并校对/);
+  await reopened.click('start-translation'); await until(() => reopened.state().session.status === 'completed');
+  assert.equal(reopened.state().session.entries[0].translations.en, 'Log in');
+  assert.equal(reopened.state().jobs[0].items[0].reused, true);
+  assert.deepEqual(app.errors, []); assert.deepEqual(reopened.errors, []);
+});
+
+test('saved translations from another project cannot satisfy the current project plan', async t => {
+  const saved = fixture(['en']);
+  const foreign = makeEntry('foreign'); foreign.translations.en = 'Foreign project translation'; foreign.translationMeta = { en: { provider: 'MyMemory', status: 'success', sourceText: foreign.source, sourceVersion: 1 } };
+  saved.projects[1].entries = [foreign];
+  let calls = 0;
+  const app = boot(saved, async () => { calls++; return { text: 'Current project translation', provider: 'MyMemory' }; }); t.after(() => app.close());
+  assert.match(app.html(), /复用已有译文<\/span><strong>0 条/);
+  await app.click('start-translation'); await until(() => app.state().session.status === 'completed');
+  assert.equal(calls, 1);
+  assert.equal(app.state().session.entries[0].translations.en, 'Current project translation');
+  assert.equal(app.state().projects[1].entries[0].translations.en, 'Foreign project translation');
+});
+
+test('document source edits invalidate old translations and manual flags before incremental translation', async t => {
+  const saved = fixture(['en']); saved.view = 'import'; saved.session.mode = 'document';
+  const row = saved.session.entries[0]; row.translations.en = 'Original manual'; row.edited.en = true; row.reviewed.en = true;
+  row.translationMeta = { en: { provider: 'manual', status: 'success', sourceText: row.source } };
+  const calls = [];
+  const app = boot(saved, async source => { calls.push(source); return { text: 'Changed translation', provider: 'MyMemory' }; }); t.after(() => app.close());
+  await app.editDocumentSource(0, '更新后的原文'); await app.click('to-languages');
+  const edited = app.state().session.entries[0];
+  assert.equal(edited.sourceVersion, 2); assert.deepEqual(edited.edited, {}); assert.deepEqual(edited.translationMeta, {});
+  await app.click('start-translation'); await until(() => app.state().session.status === 'completed');
+  assert.deepEqual(calls, ['更新后的原文']);
+  assert.equal(app.state().session.entries[0].translationMeta.en.sourceVersion, 2);
+  assert.equal(app.state().session.entries[0].translations.en, 'Changed translation');
+});
+
+test('explicit single retranslation continues to bypass caches when an incremental result already exists', async t => {
+  const saved = fixture(['en']); saved.view = 'review'; saved.session.status = 'completed';
+  for (const row of [saved.projects[0].entries[0], saved.session.entries[0]]) {
+    row.translations.en = 'Log in'; row.translationMeta = { en: { provider: 'MyMemory', status: 'success', sourceText: row.source, sourceVersion: 1 } };
+  }
+  let calls = 0;
+  const app = boot(saved, async (source, locale, options) => { calls++; assert.equal(options.bypassCache, true); return { text: 'Sign in', provider: 'MyMemory' }; }); t.after(() => app.close());
+  app.field('review-key', 'key_one'); app.field('review-text', 'Log in');
+  await app.click('retranslate'); await until(() => app.state().session.entries[0].translations.en === 'Sign in');
+  assert.equal(calls, 1);
+  assert.equal(app.state().session.entries[0].translationMeta.en.sourceVersion, 1);
 });

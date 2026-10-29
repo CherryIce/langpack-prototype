@@ -1880,6 +1880,7 @@ class _WorkspaceState extends State<_Workspace> {
 
   Widget _languages() {
     final p = c.currentProject!;
+    final plan = c.incrementalPlan();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -2036,12 +2037,12 @@ class _WorkspaceState extends State<_Workspace> {
                 _summary('目标语言', '${p.locales.length} 种'),
                 const Divider(height: 30),
                 const Text(
-                  '即将生成',
+                  '需要新增翻译',
                   style: TextStyle(fontSize: 12, color: _muted),
                 ),
                 const SizedBox(height: 10),
                 Text(
-                  '${p.selectedEntries.length * p.locales.length} 条译文',
+                  '${plan.uniquePending} 组原文与语言',
                   style: const TextStyle(
                     fontSize: 29,
                     color: _green,
@@ -2049,6 +2050,9 @@ class _WorkspaceState extends State<_Workspace> {
                   ),
                 ),
                 const SizedBox(height: 16),
+                _summary('保留已有结果', '${plan.retained} 条'),
+                _summary('复用项目译文', '${plan.reusable} 条'),
+                _summary('本批重复文案', '${plan.pending - plan.uniquePending} 条'),
                 Wrap(
                   spacing: 6,
                   runSpacing: 6,
@@ -2058,7 +2062,7 @@ class _WorkspaceState extends State<_Workspace> {
                 ),
                 const SizedBox(height: 25),
                 const _Notice(
-                  '点击开始翻译，选中的原文将发送至 MyMemory。日额度用尽时自动尝试服务端 ZTAITrans；实际来源会显示在每条译文上。',
+                  '仅新增或变化且没有可复用译文的原文会发送至翻译服务；同批相同原文与语言合并处理。日额度用尽时自动尝试 ZTAITrans。',
                   icon: Icons.info_outline,
                 ),
                 const SizedBox(height: 14),
@@ -2077,7 +2081,7 @@ class _WorkspaceState extends State<_Workspace> {
                         ? null
                         : _startTranslation,
                     icon: const Icon(Icons.translate, size: 18),
-                    label: const Text('开始翻译'),
+                    label: const Text('开始增量翻译'),
                   ),
                 ),
               ],
@@ -2189,11 +2193,13 @@ class _WorkspaceState extends State<_Workspace> {
                     const SizedBox(height: 13),
                     Row(
                       children: [
-                        Text(
-                          '${c.completed} / ${c.total} 已处理',
-                          style: const TextStyle(fontSize: 12, color: _muted),
+                        Expanded(
+                          child: Text(
+                            '${c.completed} / ${c.total} 已处理 · 复用 ${c.reused} 条',
+                            style: const TextStyle(fontSize: 12, color: _muted),
+                          ),
                         ),
-                        const Spacer(),
+                        const SizedBox(width: 12),
                         Text(
                           '${(100 * ratio).round()}%',
                           style: const TextStyle(
@@ -3267,7 +3273,7 @@ class _WorkspaceState extends State<_Workspace> {
                             ),
                             const SizedBox(height: 6),
                             Text(
-                              '${_taskStatus(pair.$2)} · 已处理 ${pair.$2.completed}/${pair.$2.total} · 失败 ${pair.$2.failed}',
+                              '${_taskStatus(pair.$2)} · 已处理 ${pair.$2.completed}/${pair.$2.total} · 复用 ${pair.$2.reused} · 失败 ${pair.$2.failed}',
                               style: const TextStyle(
                                 fontSize: 11,
                                 color: _muted,

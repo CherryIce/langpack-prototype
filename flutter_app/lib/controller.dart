@@ -31,7 +31,7 @@ class AppController extends ChangeNotifier {
   bool _disposed = false, _storageHealthy = true;
   String? error;
   String message = '';
-  int completed = 0, total = 0, failed = 0;
+  int completed = 0, total = 0, failed = 0, reused = 0;
   String activeLabel = '';
   String? activeProjectId;
   CancelToken? _token;
@@ -127,7 +127,7 @@ class AppController extends ChangeNotifier {
       activeProjectId = null;
       _activeJob = null;
       paused = false;
-      completed = total = failed = 0;
+      completed = total = failed = reused = 0;
       activeLabel = '';
       message = '';
     }
@@ -233,6 +233,8 @@ class AppController extends ChangeNotifier {
       ..edited = true
       ..reviewed = false
       ..provider = '人工编辑'
+      ..sourceText = entry.source
+      ..sourceRevision = entry.sourceRevision
       ..error = ''
       ..status = (text.trim().isEmpty
           ? TranslationStatus.pending
@@ -257,9 +259,84 @@ class AppController extends ChangeNotifier {
     if (reviewed && value.text.trim().isNotEmpty) {
       value
         ..status = TranslationStatus.done
+        ..sourceText = entry.source
+        ..sourceRevision = entry.sourceRevision
         ..error = '';
     }
     _changed();
+  }
+
+  bool _boundTo(Entry entry, TranslationValue value) =>
+      value.sourceText == entry.source &&
+      value.sourceRevision == entry.sourceRevision;
+
+  bool _retained(Entry entry, TranslationValue value) =>
+      value.edited ||
+      value.reviewed ||
+      value.status == TranslationStatus.done &&
+          value.text.trim().isNotEmpty &&
+          (_boundTo(entry, value) ||
+              value.sourceText == null && value.sourceRevision == null);
+
+  Map<(String, String), TranslationValue?> _translationMemory(
+    Project p, {
+    String? source,
+    String? locale,
+  }) {
+    final memory = <(String, String), TranslationValue?>{};
+    for (final entry in p.entries) {
+      if (source != null && entry.source != source) continue;
+      for (final pair in entry.translations.entries) {
+        if (locale != null && pair.key != locale) continue;
+        final value = pair.value;
+        if (value.edited ||
+            value.status != TranslationStatus.done ||
+            !['MyMemory', 'ZTAITrans'].contains(value.provider) ||
+            !_boundTo(entry, value) ||
+            value.text.trim().isEmpty ||
+            !listEquals(
+              _documents.placeholders(entry.source),
+              _documents.placeholders(value.text),
+            )) {
+          continue;
+        }
+        final key = (entry.source, pair.key);
+        if (!memory.containsKey(key)) {
+          memory[key] = value;
+        } else if (memory[key]?.text != value.text) {
+          // Different translations can carry different context. Do not pick one.
+          memory[key] = null;
+        }
+      }
+    }
+    return memory;
+  }
+
+  IncrementalPlan incrementalPlan() {
+    final p = currentProject;
+    if (p == null) return const IncrementalPlan();
+    final memory = _translationMemory(p);
+    final unique = <(String, String)>{};
+    var retained = 0, reusable = 0, pending = 0;
+    for (final entry in p.selectedEntries) {
+      for (final code in p.locales) {
+        final value = entry.translations[code];
+        if (value != null && _retained(entry, value)) {
+          retained++;
+        } else if (memory[(entry.source, code)] != null) {
+          reusable++;
+        } else {
+          pending++;
+          unique.add((entry.source, code));
+        }
+      }
+    }
+    return IncrementalPlan(
+      retained: retained,
+      reusable: reusable,
+      pending: pending,
+      uniquePending: unique.length,
+    );
   }
 
   Future<void> startTranslation({
@@ -277,6 +354,7 @@ class AppController extends ChangeNotifier {
       return;
     }
     final work = <_Work>[];
+    final batchResults = <(String, String), (Entry, int, TranslationResult)>{};
     for (final entry in p.selectedEntries) {
       if (entryId != null && entry.id != entryId) continue;
       for (final code in locales) {
@@ -285,11 +363,7 @@ class AppController extends ChangeNotifier {
         if (retryFailedOnly && value.status != TranslationStatus.failed) {
           continue;
         }
-        if (!overwrite &&
-            (value.edited ||
-                value.reviewed ||
-                value.status == TranslationStatus.done &&
-                    value.text.trim().isNotEmpty)) {
+        if (!overwrite && _retained(entry, value)) {
           continue;
         }
         work.add(
@@ -304,6 +378,8 @@ class AppController extends ChangeNotifier {
       }
     }
     if (work.isEmpty) {
+      completed = total = failed = reused = 0;
+      error = null;
       message = '没有待翻译文案，已保留成功及人工校对的结果。';
       _notify();
       return;
@@ -316,6 +392,7 @@ class AppController extends ChangeNotifier {
     message = '';
     completed = 0;
     failed = 0;
+    reused = 0;
     total = work.length;
     activeProjectId = p.id;
     final job = TaskRecord(total: total);
@@ -336,20 +413,48 @@ class AppController extends ChangeNotifier {
         activeLabel = '${item.entry.key} → ${languageName(item.locale)}';
         _notify();
         try {
-          final result = await _translator.translate(
-            item.source,
-            item.locale,
-            token: token,
-            email: settings.email,
-            apiBaseUrl: settings.apiBaseUrl,
-            bypassCache: overwrite,
-            onStatus: (status) {
-              if (generation == _generation) {
-                message = status;
-                _notify();
-              }
-            },
-          );
+          final pair = (item.source, item.locale);
+          final batch = batchResults[pair];
+          final donor = batch?.$1.translations[item.locale];
+          final freshResult =
+              batch != null &&
+                  p.entries.contains(batch.$1) &&
+                  donor != null &&
+                  donor.revision == batch.$2 &&
+                  !donor.edited &&
+                  _boundTo(batch.$1, donor)
+              ? batch.$3
+              : null;
+          final remembered = overwrite
+              ? null
+              : _translationMemory(
+                  p,
+                  source: item.source,
+                  locale: item.locale,
+                )[pair];
+          final reusedResult = overwrite ? null : freshResult;
+          final result =
+              reusedResult ??
+              (remembered == null
+                  ? await _translator.translate(
+                      item.source,
+                      item.locale,
+                      token: token,
+                      email: settings.email,
+                      apiBaseUrl: settings.apiBaseUrl,
+                      bypassCache: overwrite,
+                      onStatus: (status) {
+                        if (generation == _generation) {
+                          message = status;
+                          _notify();
+                        }
+                      },
+                    )
+                  : TranslationResult(
+                      text: remembered.text,
+                      provider: remembered.provider,
+                      cached: true,
+                    ));
           if (token.cancelled || generation != _generation) break;
           if (_canApply(p, item)) {
             value
@@ -358,9 +463,16 @@ class AppController extends ChangeNotifier {
               ..status = TranslationStatus.done
               ..edited = false
               ..reviewed = false
+              ..sourceText = item.source
+              ..sourceRevision = item.sourceRevision
               ..error = '';
             value.revision++;
             job.provider = result.provider;
+            batchResults[pair] = (item.entry, value.revision, result);
+            if (remembered != null || reusedResult != null) {
+              reused++;
+              job.reused = reused;
+            }
           }
           completed++;
         } on TranslationFailure catch (failure) {
@@ -410,7 +522,9 @@ class AppController extends ChangeNotifier {
         }
         message =
             error ??
-            (failed > 0 ? '翻译结束，$failed 项失败，可只重试失败项。' : '翻译完成，可以校对和导出。');
+            (failed > 0
+                ? '翻译结束，$failed 项失败，可只重试失败项。'
+                : '翻译完成，复用 $reused 条译文，可以校对和导出。');
         activeLabel = '';
         _changed(project: p);
         await flush();

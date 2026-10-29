@@ -258,7 +258,7 @@ test('fatal backup authentication, configuration and disabled errors block remai
 });
 
 test('an explicit retry after fixing a fatal backup problem resumes only unfinished cells', async () => {
-  const rows = [entry('a'), entry('b'), entry('c')], job = jobFor(rows, ['en']);
+  const rows = [entry('a', '登录'), entry('b', '注册'), entry('c', '保存')], job = jobFor(rows, ['en']);
   const calls = [];
   let fixed = false;
   const client = { async translate(source, locale) {
@@ -278,6 +278,95 @@ test('an explicit retry after fixing a fatal backup problem resumes only unfinis
   assert.deepEqual(calls, ['a', 'b', 'b', 'c']);
   assert.equal(Jobs.summary(job).success, 3);
   assert.equal(job.error, undefined);
+});
+
+function translated(id, source, text, locale = 'en', overrides = {}) {
+  const row = entry(id, source);
+  row.translations[locale] = text;
+  row.translationMeta = { [locale]: { provider: 'MyMemory', status: 'success', sourceText: source, sourceVersion: 1, ...overrides } };
+  return row;
+}
+
+test('incremental plan is pure and counts reused, protected and unique missing source-language pairs', () => {
+  const known = translated('known', '欢迎，{name}', 'Welcome, {name}'); known.reviewed.en = true;
+  const manual = entry('manual', '人工内容'); manual.edited.en = true; manual.translations.en = 'Keep mine';
+  const rows = [entry('new-copy', known.source), entry('new', '新增'), entry('duplicate', '新增'), manual];
+  const before = JSON.stringify(rows);
+  assert.deepEqual(Jobs.plan({ entries: rows, locales: ['en', 'en'], memoryEntries: [known] }), {
+    total: 4, reused: 1, protected: 1, pending: 2, uniquePending: 1, duplicatePending: 1, characters: 2
+  });
+  assert.equal(JSON.stringify(rows), before);
+});
+
+test('persisted same-project translation memory reuses reimports and only requests changed text or new languages', async () => {
+  const old = translated('old', '欢迎，{name}', 'Welcome, {name}', 'en', { provider: 'ZTAITrans' }); old.reviewed.en = true;
+  const memory = JSON.parse(JSON.stringify([old]));
+  const rows = [entry('reimported', old.source), entry('changed', '再见，{name}')];
+  const job = Jobs.createJob({ entries: rows, locales: ['en', 'ja'], memoryEntries: memory });
+  const calls = [];
+  await Jobs.run(job, { memoryEntries: memory, client: { async translate(source, locale) { calls.push([source, locale]); return { text: `${locale}:${source}`, provider: 'MyMemory' }; } } });
+  assert.deepEqual(calls, [['再见，{name}', 'en'], ['欢迎，{name}', 'ja'], ['再见，{name}', 'ja']]);
+  assert.equal(rows[0].translations.en, 'Welcome, {name}');
+  assert.equal(rows[0].translationMeta.en.provider, 'ZTAITrans');
+  assert.equal(rows[0].translationMeta.en.sourceVersion, 1);
+  assert.equal(rows[0].reviewed.en, false);
+  assert.equal(old.reviewed.en, true);
+  assert.equal(job.items[0].reused, true);
+});
+
+test('duplicates in a batch share the first successful result per locale without relying on service cache', async () => {
+  const rows = [entry('one'), entry('two'), entry('three')], job = jobFor(rows);
+  const calls = [];
+  await Jobs.run(job, { client: { async translate(source, locale) { calls.push([source, locale]); return { text: `${locale}:translation`, provider: 'MyMemory', requestCount: 1 }; } } });
+  assert.deepEqual(calls, [['登录', 'en'], ['登录', 'ja']]);
+  assert.equal(job.items.filter(item => item.reused).length, 4);
+  assert.equal(job.items.filter(item => item.reused).every(item => item.requestCount === 0), true);
+  assert.equal(rows[2].translations.ja, 'ja:translation');
+});
+
+test('conflicting saved variants require a new result, then duplicates share that result only within the current run', async () => {
+  const memory = [translated('first', '登录', 'Log in'), translated('second', '登录', 'Sign in')];
+  const rows = [entry('one'), entry('two')];
+  const job = Jobs.createJob({ entries: rows, locales: ['en'], memoryEntries: memory });
+  assert.equal(job.plan.reused, 0);
+  assert.equal(job.plan.uniquePending, 1);
+  assert.equal(rows[0].translations.en, undefined);
+  let calls = 0;
+  await Jobs.run(job, { memoryEntries: memory, client: { async translate() { calls++; return { text: 'Fresh log in', provider: 'MyMemory' }; } } });
+  assert.equal(calls, 1);
+  assert.equal(rows[1].translations.en, 'Fresh log in');
+  const later = Jobs.createJob({ entries: [entry('later')], locales: ['en'], memoryEntries: [...memory, ...rows] });
+  assert.equal(later.items[0].status, 'pending');
+});
+
+test('untrusted, stale, empty, edited or placeholder-damaged translations never propagate to other entries', async t => {
+  for (const [name, alter] of [
+    ['legacy', row => { row.translationMeta.en.provider = 'LegacyDemo'; }],
+    ['failed', row => { row.translationMeta.en.status = 'failed'; }],
+    ['empty', row => { row.translations.en = ' '; }],
+    ['edited', row => { row.edited.en = true; }],
+    ['old source', row => { row.translationMeta.en.sourceText = '旧原文'; }],
+    ['old revision', row => { row.sourceVersion = 2; }],
+    ['missing placeholder', row => { row.translations.en = 'Welcome'; }]
+  ]) await t.test(name, async () => {
+    const donor = translated('donor', '欢迎，{name}', 'Welcome, {name}'); alter(donor);
+    const row = entry('target', donor.source);
+    const job = Jobs.createJob({ entries: [row], locales: ['en'], memoryEntries: [donor] });
+    let calls = 0;
+    await Jobs.run(job, { memoryEntries: [donor], client: { async translate() { calls++; return { text: 'New {name}', provider: 'MyMemory' }; } } });
+    assert.equal(calls, 1); assert.equal(row.translations.en, 'New {name}');
+  });
+});
+
+test('editing the successful donor during progress invalidates its temporary run memory', async () => {
+  const rows = [entry('one'), entry('two')], job = jobFor(rows, ['en']);
+  let calls = 0;
+  await Jobs.run(job, {
+    onChange(current, item) { if (item?.entryId === 'one' && item.status === 'success') { rows[0].edited.en = true; rows[0].translations.en = 'Context-specific human edit'; } },
+    client: { async translate() { calls++; return { text: 'Machine ' + calls, provider: 'MyMemory' }; } }
+  });
+  assert.equal(calls, 2); assert.equal(rows[1].translations.en, 'Machine 2');
+  assert.equal(rows[0].translations.en, 'Context-specific human edit');
 });
 
 test('quota classification remains quota even when a provider also marks the failure fatal', async () => {

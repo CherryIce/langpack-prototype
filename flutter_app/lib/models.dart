@@ -39,6 +39,8 @@ class TranslationValue {
     this.status = TranslationStatus.pending,
     this.error = '',
     this.revision = 0,
+    this.sourceText,
+    this.sourceRevision,
   });
   String text;
   String provider;
@@ -47,6 +49,8 @@ class TranslationValue {
   TranslationStatus status;
   String error;
   int revision;
+  String? sourceText;
+  int? sourceRevision;
   Map<String, dynamic> toJson() => {
     'text': text,
     'provider': provider,
@@ -55,6 +59,8 @@ class TranslationValue {
     'status': status.name,
     'error': error,
     'revision': revision,
+    'sourceText': sourceText,
+    'sourceRevision': sourceRevision,
   };
   factory TranslationValue.fromJson(Map<String, dynamic> data) {
     var status = TranslationStatus.values.firstWhere(
@@ -72,6 +78,8 @@ class TranslationValue {
       status: status,
       error: data['error'] as String? ?? '',
       revision: data['revision'] as int? ?? 0,
+      sourceText: data['sourceText'] as String?,
+      sourceRevision: data['sourceRevision'] as int?,
     );
   }
 }
@@ -104,19 +112,29 @@ class Entry {
       (key, value) => MapEntry(key, value.toJson()),
     ),
   };
-  factory Entry.fromJson(Map<String, dynamic> data) => Entry(
-    id: data['id'] as String?,
-    key: data['key'] as String? ?? '',
-    source: data['source'] as String? ?? '',
-    selected: data['selected'] != false,
-    sourceRevision: data['sourceRevision'] as int? ?? 0,
-    translations: (data['translations'] as Map<String, dynamic>? ?? {}).map(
-      (key, value) => MapEntry(
-        key,
-        TranslationValue.fromJson(Map<String, dynamic>.from(value as Map)),
+  factory Entry.fromJson(Map<String, dynamic> data) {
+    final entry = Entry(
+      id: data['id'] as String?,
+      key: data['key'] as String? ?? '',
+      source: data['source'] as String? ?? '',
+      selected: data['selected'] != false,
+      sourceRevision: data['sourceRevision'] as int? ?? 0,
+      translations: (data['translations'] as Map<String, dynamic>? ?? {}).map(
+        (key, value) => MapEntry(
+          key,
+          TranslationValue.fromJson(Map<String, dynamic>.from(value as Map)),
+        ),
       ),
-    ),
-  );
+    );
+    // Older saves kept translations on the entry and cleared them on source edits.
+    for (final value in entry.translations.values) {
+      if (value.sourceText == null && value.sourceRevision == null) {
+        value.sourceText = entry.source;
+        value.sourceRevision = entry.sourceRevision;
+      }
+    }
+    return entry;
+  }
 }
 
 class DocumentBlock {
@@ -245,6 +263,7 @@ class TaskRecord {
     this.total = 0,
     this.failed = 0,
     this.provider = '',
+    this.reused = 0,
   }) : id = id ?? newId(),
        createdAt = createdAt ?? DateTime.now();
   final String id;
@@ -254,6 +273,7 @@ class TaskRecord {
   int total;
   int failed;
   String provider;
+  int reused;
   Map<String, dynamic> toJson() => {
     'id': id,
     'createdAt': createdAt.toIso8601String(),
@@ -262,6 +282,7 @@ class TaskRecord {
     'total': total,
     'failed': failed,
     'provider': provider,
+    'reused': reused,
   };
   factory TaskRecord.fromJson(Map<String, dynamic> data) => TaskRecord(
     id: data['id'] as String?,
@@ -273,7 +294,18 @@ class TaskRecord {
     total: data['total'] as int? ?? 0,
     failed: data['failed'] as int? ?? 0,
     provider: data['provider'] as String? ?? '',
+    reused: data['reused'] as int? ?? 0,
   );
+}
+
+class IncrementalPlan {
+  const IncrementalPlan({
+    this.retained = 0,
+    this.reusable = 0,
+    this.pending = 0,
+    this.uniquePending = 0,
+  });
+  final int retained, reusable, pending, uniquePending;
 }
 
 class AppSettings {

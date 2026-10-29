@@ -8,10 +8,53 @@
   const revisionOf = (entry, locale) => entry.translationRevision?.[locale] ?? 0;
   const isManual = (entry, locale) => !!(entry.edited?.[locale] || entry.reviewed?.[locale]);
   const isCurrent = (entry, item) => !!entry && String(entry.source ?? '') === item.source && versionOf(entry) === item.sourceVersion;
+  const placeholders = value => (String(value).match(/\{\{\s*[\w.]+\s*\}\}|\{[\w.]+\}|%(?:\d+\$)?[-+#0 ']*(?:\d+|\*)?(?:\.(?:\d+|\*))?[sdif@uoxXegGc]|%%/g) || []).map(token => token.replace(/\s+/g, '')).sort();
   const reusable = (entry, item) => {
     const meta = entry.translationMeta?.[item.locale];
-    return providerOf(meta?.provider) && meta.status === 'success' && meta.sourceText === item.source && textOf(entry.translations?.[item.locale]).trim() !== '';
+    const text = textOf(entry.translations?.[item.locale]);
+    return !entry.edited?.[item.locale] && providerOf(meta?.provider) && meta.status === 'success' && entry.source === item.source && meta.sourceText === item.source && (meta.sourceVersion == null || meta.sourceVersion === versionOf(entry)) && text.trim() !== '' && JSON.stringify(placeholders(item.source)) === JSON.stringify(placeholders(text));
   };
+  function memoryFor(source, locale, entries) {
+    let found;
+    for (const entry of entries) {
+      if (!reusable(entry, { source, locale })) continue;
+      const candidate = { text: textOf(entry.translations[locale]), meta: entry.translationMeta[locale], entryId: entry.id };
+      // Identical source text may have deliberately different contextual translations.
+      if (found && found.text !== candidate.text) return null;
+      found = candidate;
+    }
+    return found;
+  }
+  function copyMemory(entry, item, memory) {
+    entry.translations ||= {}; entry.translationMeta ||= {}; entry.reviewed ||= {};
+    entry.translations[item.locale] = memory.text;
+    entry.reviewed[item.locale] = false;
+    entry.translationMeta[item.locale] = { ...memory.meta, sourceText: item.source, sourceVersion: item.sourceVersion, cached: true, reusedFrom: memory.entryId };
+    Object.assign(item, { status: 'success', reused: true, provider: memory.meta.provider, cached: true, requestCount: 0 });
+  }
+  function plan({ entries = [], locales = [], memoryEntries = [] } = {}) {
+    const active = entries.filter(entry => entry.selected !== false);
+    const memory = [...memoryEntries, ...active];
+    const pending = new Map();
+    const result = { total: 0, reused: 0, protected: 0, pending: 0, uniquePending: 0, duplicatePending: 0, characters: 0 };
+    for (const locale of new Set(locales)) for (const entry of active) {
+      result.total++;
+      if (isManual(entry, locale)) result.protected++;
+      else if (reusable(entry, { source: entry.source, locale })) result.reused++;
+      else {
+        const candidate = memoryFor(entry.source, locale, memory);
+        if (candidate) result.reused++;
+        else {
+          result.pending++;
+          pending.set(JSON.stringify([locale, entry.source]), entry.source);
+        }
+      }
+    }
+    result.uniquePending = pending.size;
+    result.duplicatePending = result.pending - pending.size;
+    result.characters = [...pending.values()].reduce((sum, source) => sum + source.length, 0);
+    return result;
+  }
   const now = () => new Date().toISOString();
   function errorInfo(error, fallbackProvider) {
     return { code: String(error?.code || 'TRANSLATION_FAILED'), message: String(error?.message || '翻译失败，请稍后重试。'), provider: providerOf(error?.provider) || providerOf(fallbackProvider) || 'Unknown', retryable: !!error?.retryable, fatal: !!error?.fatal, quota: !!error?.quota || error?.code === 'QUOTA' || error?.code === 'QUOTA_EXCEEDED' };
@@ -29,17 +72,22 @@
     const counts = summary(job);
     Object.assign(job, { total: counts.total, processed: counts.processed, success: counts.success, failed: counts.failed, skipped: counts.skipped });
   }
-  function createJob({ id, projectId, projectName, entries, locales, createdAt, provider = 'TranslationChain' }) {
+  function createJob({ id, projectId, projectName, entries, locales, memoryEntries = [], createdAt, provider = 'TranslationChain' }) {
     const active = (entries || []).filter(entry => entry.selected !== false);
     const targets = [...new Set(locales || [])];
     const job = {
       id, projectId, projectName, entries: active, locales: targets,
       provider: ['TranslationChain', 'MyMemory', 'ZTAITrans'].includes(provider) ? provider : 'TranslationChain', count: active.length, status: 'pending',
       createdAt: createdAt || now(), activeItem: null,
+      plan: plan({ entries: active, locales: targets, memoryEntries }),
       items: targets.flatMap(locale => active.map(entry => {
         const item = { entryId: entry.id, locale, source: String(entry.source ?? ''), sourceVersion: versionOf(entry), status: 'pending', attempts: 0 };
         if (isManual(entry, locale)) { item.status = 'skipped'; item.reason = 'manual'; }
         else if (reusable(entry, item)) { item.status = 'success'; item.reused = true; item.provider = entry.translationMeta[locale].provider; }
+        else {
+          const memory = memoryFor(item.source, locale, [...memoryEntries, ...active]);
+          if (memory) copyMemory(entry, item, memory);
+        }
         return item;
       }))
     };
@@ -63,13 +111,21 @@
     sync(job);
     return job;
   }
-  async function run(job, { entries = job.entries, client, signal, onChange } = {}) {
+  async function run(job, { entries = job.entries, memoryEntries = [], client, signal, onChange } = {}) {
     if (!client || typeof client.translate !== 'function') throw new TypeError('需要提供翻译服务。');
     if (running.has(job) && !running.get(job).signal?.aborted) throw Object.assign(new Error('任务已经在执行。'), { code: 'BUSY' });
     const token = { signal };
     running.set(job, token);
     const owns = () => running.get(job) === token;
     const findEntry = item => entries.find(entry => entry.id === item.entryId);
+    const freshResults = new Map();
+    const memoryKey = item => JSON.stringify([item.locale, item.source]);
+    const freshMemory = item => {
+      const saved = freshResults.get(memoryKey(item));
+      const donor = saved && entries.find(entry => entry.id === saved.entryId);
+      if (!donor || versionOf(donor) !== saved.sourceVersion || revisionOf(donor, item.locale) !== saved.revision || !reusable(donor, item) || textOf(donor.translations[item.locale]) !== saved.text) return null;
+      return { text: saved.text, meta: donor.translationMeta[item.locale], entryId: donor.id };
+    };
     const notify = item => { if (!owns()) return; sync(job); if (onChange) onChange(job, item); };
     const fail = (item, entry, error, writeMeta = true) => {
       item.status = 'failed'; item.error = errorInfo(error, job.activeItem?.provider); item.provider = item.error.provider; item.finishedAt = now();
@@ -96,6 +152,8 @@
         if (!isCurrent(entry, item)) { fail(item, entry, { code: 'STALE', message: '原文已更新，请重新创建翻译任务。' }, false); notify(item); continue; }
         if (isManual(entry, item.locale)) { skip(item, 'manual'); notify(item); continue; }
         if (reusable(entry, item)) { item.status = 'success'; item.reused = true; item.provider = entry.translationMeta[item.locale].provider; notify(item); continue; }
+        const memory = freshMemory(item) || memoryFor(item.source, item.locale, [...memoryEntries, ...entries]);
+        if (memory) { copyMemory(entry, item, memory); notify(item); continue; }
         const revision = revisionOf(entry, item.locale);
         item.status = 'running'; item.attempts = (item.attempts || 0) + 1;
         delete item.error;
@@ -138,6 +196,7 @@
             entry.translationMeta[item.locale] = { provider, status: 'success', sourceText: item.source, sourceVersion: item.sourceVersion, translatedAt, cached: !!result.cached };
             Object.assign(item, { status: 'success', provider, translatedAt, cached: !!result.cached, requestCount: result.requestCount || 0 });
             delete item.reused;
+            freshResults.set(memoryKey(item), { entryId: entry.id, sourceVersion: versionOf(entry), revision: revisionOf(entry, item.locale), text: result.text });
           }
         } catch (error) {
           if (!owns()) return job;
@@ -166,7 +225,7 @@
       if (owns()) running.delete(job);
     }
   }
-  const api = { createJob, run, summary, retryFailed, normalize };
+  const api = { createJob, run, summary, retryFailed, normalize, plan };
   root.LangPackJobs = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

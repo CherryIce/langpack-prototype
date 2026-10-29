@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const M = require('../dist/mymemory.js');
+const M = require('../web/mymemory.js');
 
 function response(text, { status = 200, serviceStatus = 200, details = '', quotaFinished = false, retryAfter = null } = {}) {
   return {

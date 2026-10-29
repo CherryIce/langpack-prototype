@@ -2,6 +2,7 @@
   'use strict';
 
   const running = new WeakMap();
+  const providerOf = value => ['MyMemory', 'ZTAITrans'].includes(value) ? value : null;
   const textOf = value => value && typeof value === 'object' ? String(value.text ?? '') : String(value ?? '');
   const versionOf = entry => entry.sourceVersion ?? 1;
   const revisionOf = (entry, locale) => entry.translationRevision?.[locale] ?? 0;
@@ -9,11 +10,11 @@
   const isCurrent = (entry, item) => !!entry && String(entry.source ?? '') === item.source && versionOf(entry) === item.sourceVersion;
   const reusable = (entry, item) => {
     const meta = entry.translationMeta?.[item.locale];
-    return meta?.provider === 'MyMemory' && meta.status === 'success' && meta.sourceText === item.source && textOf(entry.translations?.[item.locale]).trim() !== '';
+    return providerOf(meta?.provider) && meta.status === 'success' && meta.sourceText === item.source && textOf(entry.translations?.[item.locale]).trim() !== '';
   };
   const now = () => new Date().toISOString();
-  function errorInfo(error) {
-    return { code: String(error?.code || 'TRANSLATION_FAILED'), message: String(error?.message || '翻译失败，请稍后重试。'), retryable: !!error?.retryable, quota: !!error?.quota || error?.code === 'QUOTA' || error?.code === 'QUOTA_EXCEEDED' };
+  function errorInfo(error, fallbackProvider) {
+    return { code: String(error?.code || 'TRANSLATION_FAILED'), message: String(error?.message || '翻译失败，请稍后重试。'), provider: providerOf(error?.provider) || providerOf(fallbackProvider) || 'Unknown', retryable: !!error?.retryable, fatal: !!error?.fatal, quota: !!error?.quota || error?.code === 'QUOTA' || error?.code === 'QUOTA_EXCEEDED' };
   }
   function summary(job) {
     const result = { total: job.items.length, processed: 0, success: 0, failed: 0, pending: 0, skipped: 0, ratio: 0 };
@@ -28,17 +29,17 @@
     const counts = summary(job);
     Object.assign(job, { total: counts.total, processed: counts.processed, success: counts.success, failed: counts.failed, skipped: counts.skipped });
   }
-  function createJob({ id, projectId, projectName, entries, locales, createdAt }) {
+  function createJob({ id, projectId, projectName, entries, locales, createdAt, provider = 'TranslationChain' }) {
     const active = (entries || []).filter(entry => entry.selected !== false);
     const targets = [...new Set(locales || [])];
     const job = {
       id, projectId, projectName, entries: active, locales: targets,
-      provider: 'MyMemory', count: active.length, status: 'pending',
+      provider: ['TranslationChain', 'MyMemory', 'ZTAITrans'].includes(provider) ? provider : 'TranslationChain', count: active.length, status: 'pending',
       createdAt: createdAt || now(), activeItem: null,
       items: targets.flatMap(locale => active.map(entry => {
         const item = { entryId: entry.id, locale, source: String(entry.source ?? ''), sourceVersion: versionOf(entry), status: 'pending', attempts: 0 };
         if (isManual(entry, locale)) { item.status = 'skipped'; item.reason = 'manual'; }
-        else if (reusable(entry, item)) { item.status = 'success'; item.reused = true; }
+        else if (reusable(entry, item)) { item.status = 'success'; item.reused = true; item.provider = entry.translationMeta[locale].provider; }
         return item;
       }))
     };
@@ -55,7 +56,7 @@
   function retryFailed(job) {
     if (running.has(job) && !running.get(job).signal?.aborted) throw Object.assign(new Error('任务仍在执行，请先暂停。'), { code: 'BUSY' });
     job.items.forEach(item => {
-      if (item.status === 'failed' || item.status === 'running') { item.status = 'pending'; delete item.error; delete item.reason; }
+      if (item.status === 'failed' || item.status === 'running') { item.status = 'pending'; delete item.error; delete item.reason; delete item.provider; }
     });
     if (job.items.some(item => item.status === 'pending')) job.status = 'paused';
     job.activeItem = null;
@@ -71,10 +72,10 @@
     const findEntry = item => entries.find(entry => entry.id === item.entryId);
     const notify = item => { if (!owns()) return; sync(job); if (onChange) onChange(job, item); };
     const fail = (item, entry, error, writeMeta = true) => {
-      item.status = 'failed'; item.error = errorInfo(error); item.finishedAt = now();
+      item.status = 'failed'; item.error = errorInfo(error, job.activeItem?.provider); item.provider = item.error.provider; item.finishedAt = now();
       if (entry && writeMeta) {
         entry.translationMeta = entry.translationMeta || {};
-        entry.translationMeta[item.locale] = { provider: 'MyMemory', status: 'failed', sourceText: item.source, sourceVersion: item.sourceVersion, error: { ...item.error } };
+        entry.translationMeta[item.locale] = { provider: item.error.provider, status: 'failed', sourceText: item.source, sourceVersion: item.sourceVersion, error: { ...item.error } };
       }
     };
     const skip = (item, reason) => { item.status = 'skipped'; item.reason = reason; delete item.error; };
@@ -94,11 +95,12 @@
         let entry = findEntry(item);
         if (!isCurrent(entry, item)) { fail(item, entry, { code: 'STALE', message: '原文已更新，请重新创建翻译任务。' }, false); notify(item); continue; }
         if (isManual(entry, item.locale)) { skip(item, 'manual'); notify(item); continue; }
-        if (reusable(entry, item)) { item.status = 'success'; item.reused = true; notify(item); continue; }
+        if (reusable(entry, item)) { item.status = 'success'; item.reused = true; item.provider = entry.translationMeta[item.locale].provider; notify(item); continue; }
         const revision = revisionOf(entry, item.locale);
         item.status = 'running'; item.attempts = (item.attempts || 0) + 1;
         delete item.error;
-        const activity = { entryId: item.entryId, locale: item.locale, key: entry.key, completed: 0, total: 0, progress: null, retry: null };
+        delete item.provider;
+        const activity = { entryId: item.entryId, locale: item.locale, key: entry.key, provider: null, completed: 0, total: 0, progress: null, retry: null };
         job.activeItem = activity;
         notify(item);
         try {
@@ -108,10 +110,12 @@
             signal,
             onProgress: progress => {
               if (!owns() || signal?.aborted || item.status !== 'running' || job.activeItem !== activity) return;
-              activity.progress = progress; activity.completed = progress.completed ?? 0; activity.total = progress.total ?? 0; activity.requestCount = progress.requestCount ?? 0; notify(item);
+              if (providerOf(progress.provider)) activity.provider = progress.provider;
+              activity.progress = progress; activity.completed = progress.completed ?? 0; activity.total = progress.total ?? 0; activity.requestCount = progress.requestCount ?? 0; activity.retry = null; notify(item);
             },
             onRetry: retry => {
               if (!owns() || signal?.aborted || item.status !== 'running' || job.activeItem !== activity) return;
+              if (providerOf(retry.provider)) activity.provider = retry.provider;
               activity.retry = retry; notify(item);
             }
           });
@@ -123,14 +127,16 @@
           else if (isManual(entry, item.locale) || revisionOf(entry, item.locale) !== revision) { skip(item, 'edited_during_request'); }
           else {
             if (typeof result?.text !== 'string' || !result.text.trim()) throw Object.assign(new Error('翻译服务返回空结果。'), { code: 'EMPTY_RESULT' });
+            const provider = result.provider == null ? 'MyMemory' : providerOf(result.provider);
+            if (!provider) throw Object.assign(new Error('翻译服务返回了无法识别的来源，结果未保存。'), { code: 'INVALID_PROVIDER' });
             entry.translations = entry.translations || {};
             entry.translationMeta = entry.translationMeta || {};
             entry.reviewed = entry.reviewed || {};
             entry.translations[item.locale] = result.text;
             entry.reviewed[item.locale] = false;
             const translatedAt = now();
-            entry.translationMeta[item.locale] = { provider: 'MyMemory', status: 'success', sourceText: item.source, sourceVersion: item.sourceVersion, translatedAt, cached: !!result.cached };
-            Object.assign(item, { status: 'success', translatedAt, cached: !!result.cached, requestCount: result.requestCount || 0 });
+            entry.translationMeta[item.locale] = { provider, status: 'success', sourceText: item.source, sourceVersion: item.sourceVersion, translatedAt, cached: !!result.cached };
+            Object.assign(item, { status: 'success', provider, translatedAt, cached: !!result.cached, requestCount: result.requestCount || 0 });
             delete item.reused;
           }
         } catch (error) {
@@ -140,9 +146,14 @@
           if (!isCurrent(entry, item)) fail(item, entry, { code: 'STALE', message: '原文已更新，请重新创建翻译任务。' }, false);
           else if (isManual(entry, item.locale) || revisionOf(entry, item.locale) !== revision) skip(item, 'edited_during_request');
           else fail(item, entry, error);
-          if (errorInfo(error).quota) {
+          const failure = errorInfo(error, job.activeItem?.provider);
+          if (failure.quota) {
             job.status = 'quota'; job.activeItem = null;
-            job.error = errorInfo(error); notify(item); return job;
+            job.error = failure; notify(item); return job;
+          }
+          if (failure.fatal) {
+            job.status = 'blocked'; job.activeItem = null;
+            job.error = failure; notify(item); return job;
           }
         }
         job.activeItem = null;

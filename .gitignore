@@ -1,3 +1,8 @@
 outputs/
 .codex-build/
 .DS_Store
+
+/dist/
+.env
+.env.*
+!.env.example

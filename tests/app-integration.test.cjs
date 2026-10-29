@@ -5,7 +5,7 @@ const vm = require('node:vm');
 const { webcrypto } = require('node:crypto');
 const path = require('node:path');
 
-const dist = path.join(__dirname, '../dist');
+const dist = path.join(__dirname, '../web');
 const STORAGE = 'langpack-prototype-v1';
 const code = name => fs.readFileSync(path.join(dist, name), 'utf8');
 const clone = value => JSON.parse(JSON.stringify(value));
@@ -27,7 +27,7 @@ function fixture(locales = ['en', 'ja']) {
 }
 function deferred() { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 
-function boot(saved, translate = async () => { throw new Error('Unexpected translation request'); }) {
+function boot(saved, translate = async () => { throw new Error('Unexpected translation request'); }, options = {}) {
   const values = new Map([[STORAGE, JSON.stringify(saved)]]);
   const handlers = new Map(), errors = [], elements = new Map();
   let html = '';
@@ -59,6 +59,9 @@ function boot(saved, translate = async () => { throw new Error('Unexpected trans
   vm.runInContext(code('engine.js'), context);
   vm.runInContext(code('translation-jobs.js'), context);
   context.MyMemoryTranslator = { createClient: () => ({ translate }), utf8Length: value => new TextEncoder().encode(value).length };
+  vm.runInContext(code('translation-service.js'), context);
+  const service = context.TranslationService;
+  context.TranslationService = { ...service, createBackupClient: () => options.backupFetch ? service.createBackupClient({ fetchImpl: options.backupFetch, maxRetries: 0 }) : ({ translate: options.backupTranslate || (async () => { throw Object.assign(new Error('Backup is unavailable in this regression'), { code: 'BACKUP_NOT_CONFIGURED', provider: 'ZTAITrans', fatal: true }); }) }) };
   vm.runInContext(code('app.js'), context);
   return {
     state: () => JSON.parse(values.get(STORAGE)), html: () => html, errors,
@@ -128,15 +131,18 @@ test('event-driven batch persists successful results, failures and retry-only-fa
   assert.match(app.html(), /翻译已完成/); assert.deepEqual(app.errors, []);
 });
 
-test('quota errors stop batch, preserve pending cells and remain visible in actual UI', async t => {
-  let count = 0;
-  const app = boot(fixture(), async () => { count++; throw Object.assign(new Error('Daily quota exhausted'), { code: 'QUOTA', quota: true }); });
+test('quota errors from both providers stop batch, preserve pending cells and remain visible in actual UI', async t => {
+  let primaryCount = 0, backupCount = 0;
+  const app = boot(fixture(), async () => { primaryCount++; throw Object.assign(new Error('Daily quota exhausted'), { code: 'QUOTA', quota: true }); }, {
+    backupFetch: async () => { backupCount++; return new Response(JSON.stringify({ code: 'BACKUP_BUDGET', message: 'Budget exhausted' }), { status: 402 }); }
+  });
   t.after(() => app.close());
   await app.click('start-translation'); await until(() => app.state().session.status === 'quota');
   const state = app.state();
-  assert.equal(count, 1); assert.equal(state.jobs[0].items[1].status, 'pending');
+  assert.equal(primaryCount, 1); assert.equal(backupCount, 1); assert.equal(state.jobs[0].items[1].status, 'pending');
   assert.equal(state.projects[0].entries[0].translations.en, undefined);
-  assert.match(app.html(), /今日免费额度已用完/); assert.match(app.html(), /Daily quota exhausted/);
+  assert.equal(state.jobs[0].error.provider, 'ZTAITrans'); assert.equal(state.jobs[0].error.code, 'BACKUP_BUDGET');
+  assert.match(app.html(), /备用服务预算已用完/); assert.doesNotMatch(app.html(), /今日免费额度已用完/);
   assert.deepEqual(app.errors, []);
 });
 
@@ -211,5 +217,47 @@ test('single retranslation cannot overwrite manual input saved while awaiting AP
   const row = app.state().projects[0].entries[0];
   assert.equal(row.translations.en, 'Manual text saved while waiting');
   assert.equal(row.translationMeta.en.provider, 'manual'); assert.equal(row.edited.en, true);
+  assert.deepEqual(app.errors, []);
+});
+
+
+test('primary quota automatically switches the actual app chain to backup and persists the actual provider for every result', async t => {
+  let primaryCount = 0; const backupCalls = [];
+  const saved = fixture();
+  saved.projects[0].entries.push(makeEntry('two', '注册账号'));
+  saved.session.entries = clone(saved.projects[0].entries);
+  const app = boot(saved, async () => { primaryCount++; throw Object.assign(new Error('Primary quota exhausted'), { code: 'QUOTA', quota: true }); }, {
+    backupTranslate: async (source, locale, options) => {
+      backupCalls.push({ source, locale });
+      options.onProgress?.({ completed: 1, total: 1, requestCount: 1 });
+      return { text: locale === 'ja' ? '翻訳 ' + source : 'Translation ' + source, provider: 'ZTAITrans', requestCount: 1 };
+    }
+  });
+  t.after(() => app.close());
+  await app.click('start-translation'); await until(() => app.state().session.status === 'completed');
+  const state = app.state();
+  assert.equal(primaryCount, 1); assert.equal(backupCalls.length, 4);
+  assert.equal(state.jobs[0].provider, 'TranslationChain'); assert.equal(state.jobs[0].success, 4); assert.equal(state.jobs[0].failed, 0);
+  assert.equal(state.jobs[0].items.every(item => item.provider === 'ZTAITrans'), true);
+  for (const entry of state.projects[0].entries) for (const locale of ['en', 'ja']) assert.equal(entry.translationMeta[locale].provider, 'ZTAITrans');
+  assert.equal(state.settings.primaryCircuit.until > Date.now(), true);
+  assert.equal(state.settings.lastFallback.to, 'ZTAITrans');
+  assert.match(app.html(), /翻译已完成/); assert.doesNotMatch(app.html(), /今日免费额度已用完/);
+  assert.deepEqual(app.errors, []);
+});
+
+test('fatal backup authorization failure stops the app job and does not show the primary quota title', async t => {
+  let primaryCount = 0, backupCount = 0;
+  const app = boot(fixture(), async () => { primaryCount++; throw Object.assign(new Error('Primary quota exhausted'), { code: 'QUOTA', quota: true }); }, {
+    backupFetch: async () => { backupCount++; return new Response(JSON.stringify({ code: 'BACKUP_AUTH', message: 'Unauthorized' }), { status: 401 }); }
+  });
+  t.after(() => app.close());
+  await app.click('start-translation'); await until(() => app.state().session.status === 'blocked');
+  const state = app.state();
+  assert.equal(primaryCount, 1); assert.equal(backupCount, 1);
+  assert.equal(state.jobs[0].failed, 1); assert.equal(state.jobs[0].items[1].status, 'pending');
+  assert.equal(state.jobs[0].error.provider, 'ZTAITrans'); assert.equal(state.jobs[0].error.code, 'BACKUP_AUTH');
+  assert.equal(state.projects[0].entries[0].translations.en, undefined);
+  assert.match(app.html(), /备用翻译服务暂不可用/); assert.doesNotMatch(app.html(), /今日免费额度已用完/);
   assert.deepEqual(app.errors, []);
 });

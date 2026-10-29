@@ -123,7 +123,9 @@ export function createHandler({ fetchImpl = (...args) => fetch(...args), timeout
       const response = await abortRace(fetchImpl(UPSTREAM, {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Api-Key': secret },
         body: JSON.stringify({ model: 'fast', targetLanguage: TARGETS[body.locale], items: [{ id: 'segment-1', content: body.content }] }),
-        redirect: 'error', signal: controller.signal
+        // Workers supports manual/follow, not Fetch's "error" mode. Never follow
+        // an upstream redirect: the API key must stay on the fixed endpoint.
+        redirect: 'manual', signal: controller.signal
       }), controller.signal);
       let payload;
       try { payload = JSON.parse(await abortRace(readBounded(response, MAX_RESPONSE_BYTES, controller.signal), controller.signal)); }

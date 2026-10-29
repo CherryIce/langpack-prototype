@@ -32,11 +32,23 @@ test('proxy sends the secret only to fixed HTTPS endpoint with fixed fast model 
   const handler = createHandler({ fetchImpl: async (url, init) => {
     called++;
     assert.equal(url, 'https://aitrans-iqwek72342.futureinvest.id/api/translate/text');
-    assert.equal(init.headers['X-Api-Key'], SECRET); assert.equal(init.redirect, 'error');
+    assert.equal(init.headers['X-Api-Key'], SECRET); assert.equal(init.redirect, 'manual');
     assert.deepEqual(JSON.parse(init.body), { model: 'fast', targetLanguage: 'English', items: [{ id: 'segment-1', content: '登录' }] });
     return result();
   } });
   assert.deepEqual(await payload(await handler(request(), env), 200), { text: 'Log in', provider: 'ZTAITrans', model: 'fast' });
+  assert.equal(called, 1);
+});
+
+test('Workers-compatible manual redirects never forward the secret to a redirect destination', async () => {
+  let called = 0;
+  const handler = createHandler({ fetchImpl: async (url, init) => {
+    called++;
+    assert.equal(init.redirect, 'manual');
+    assert.equal(url, 'https://aitrans-iqwek72342.futureinvest.id/api/translate/text');
+    return new Response(null, { status: 302, headers: { Location: 'https://unrelated.invalid/collect' } });
+  } });
+  assert.equal((await payload(await handler(request(), env), 400)).code, 'BACKUP_REQUEST');
   assert.equal(called, 1);
 });
 

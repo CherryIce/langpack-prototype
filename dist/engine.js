@@ -286,7 +286,13 @@
       Array.from(new Set(locales || [])).forEach(locale => {
         const text = translationText(entry, locale);
         if (!text.trim()) add('missing', '该语言译文尚未补全。', locale);
-        else if (JSON.stringify(placeholders(text)) !== JSON.stringify(expected)) add('placeholders', '译文中的占位符与原文不一致。', locale);
+        else {
+          const meta = entry.translationMeta && entry.translationMeta[locale];
+          const checked = entry.edited && entry.edited[locale] || entry.reviewed && entry.reviewed[locale];
+          if (meta && meta.status === 'failed' && !checked) add('translation', '该译文的翻译请求失败，请重试或人工确认现有内容。', locale);
+          else if (meta && meta.provider === 'LegacyDemo' && !checked) add('legacy', '历史演示译文需重新翻译，或经人工校对确认。', locale);
+          if (JSON.stringify(placeholders(text)) !== JSON.stringify(expected)) add('placeholders', '译文中的占位符与原文不一致。', locale);
+        }
       });
     });
     if (!active.length) issues.push({ entryId: null, key: null, locale: null, type: 'empty', message: '请至少选择一条文案。' });

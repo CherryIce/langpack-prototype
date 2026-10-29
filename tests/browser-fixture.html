@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LangPack · 浏览器回归夹具</title>
+  <link rel="stylesheet" href="../dist/styles.css">
+  <script>
+    // Test-only provider fixture. This file is outside the deployed static directory.
+    let recovered = false, calls = 0;
+    window.fetch = async function (url, options = {}) {
+      const request = new URL(url);
+      if (request.origin !== 'https://api.mymemory.translated.net') throw new Error('测试环境禁止其他 fetch。');
+      if (options.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(resolve, 120);
+        options.signal?.addEventListener('abort', () => { clearTimeout(timer); reject(new DOMException('Aborted', 'AbortError')); }, { once: true });
+      });
+      calls++;
+      const source = request.searchParams.get('q'), pair = request.searchParams.get('langpair');
+      document.getElementById('fixture-count').textContent = '测试请求数：' + calls;
+      document.getElementById('fixture-log').textContent += JSON.stringify({ source, pair, bytes: new TextEncoder().encode(source).length }) + '\n';
+      const failure = /失败/.test(source) && !recovered;
+      const markers = source.match(/ZXQPH\d+QXZ/g) || [];
+      const body = failure ? { responseStatus: 400, responseDetails: 'Fixture invalid request', responseData: { translatedText: '' } } : { responseStatus: 200, responseData: { translatedText: (pair.endsWith('|ja') ? '翻訳済みのテキスト' : 'Translated text') + ' ' + markers.join(' ') } };
+      return new Response(JSON.stringify(body), { status: failure ? 400 : 200, headers: { 'Content-Type': 'application/json' } });
+    };
+    document.addEventListener('click', e => { if (e.target.id === 'fixture-recover') { recovered = true; e.target.textContent = '失败项已恢复'; } });
+  </script>
+  <script defer src="../dist/engine.js"></script>
+  <script defer src="../dist/mymemory.js"></script>
+  <script defer src="../dist/translation-jobs.js"></script>
+  <script defer src="../dist/app.js"></script>
+</head>
+<body>
+  <div id="app"></div><div id="toast" class="toast" role="status"></div><dialog id="modal"></dialog>
+  <div style="position:fixed;top:0;right:0;z-index:300;background:#fff5dc;font-size:10px;padding:4px 8px;display:flex;gap:8px"><span>测试夹具 · 模拟服务返回</span><span id="fixture-count">测试请求数：0</span><button id="fixture-recover">使失败项恢复</button></div>
+  <pre id="fixture-log" hidden></pre>
+</body>
+</html>

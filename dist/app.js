@@ -1,6 +1,8 @@
 (function () {
   'use strict';
   const E = window.LangPackEngine;
+  const M = window.MyMemoryTranslator;
+  const J = window.LangPackJobs;
   const $ = (selector, root = document) => root.querySelector(selector);
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const uid = () => crypto.randomUUID ? crypto.randomUUID() : 'id_' + Date.now().toString(36) + Math.random().toString(36).slice(2);
@@ -51,23 +53,54 @@
   const STORAGE = 'langpack-prototype-v1';
   const SAMPLE = '登录\n注册账号\n忘记密码\n欢迎回来，{name}\n保存更改\n开启通知';
   const DOC_SAMPLE = '欢迎使用译包。\n\n一次输入，即可生成多种语言的翻译结果。\n\n为每一段中文生成稳定的语义 key。\n\n按语言导出 JSON，让本地化更简单。';
-  let toastTimer, translationTimer, saveTimer, importRequest = 0;
+  let toastTimer, saveTimer, importRequest = 0, batchGeneration = 0;
+  let batchController = null, singleController = null, singleRequest = null;
+  const translationClients = new Map();
+  function translationClient() {
+    const email = state.settings.translationEmail || '';
+    if (!translationClients.has(email)) translationClients.set(email, M.createClient({ email }));
+    return translationClients.get(email);
+  }
   let storageFailed = false;
   function seedEntries(text, locales, complete = true) {
-    return E.splitText(text, 'line').map((entry, index) => {
-      locales.forEach(locale => { entry.translations[locale] = complete || locale === locales[0] ? E.translate(entry.source, locale).text : ''; entry.reviewed[locale] = complete && index < 3; });
+    return E.splitText(text, 'line').map(entry => {
+      locales.forEach(locale => { entry.translations[locale] = ''; entry.reviewed[locale] = false; });
       return entry;
     });
   }
   function initialState() {
     const now = new Date().toISOString();
-    return { version: 1, view: 'home', currentProjectId: 'mono-app', projects: [
+    return { version: 2, view: 'home', currentProjectId: 'mono-app', projects: [
       { id: 'mono-app', name: 'Mono App', description: '让产品的每一句话，都被世界读懂。', locales: ['en', 'ja', 'ko'], icon: 'layers', color: '', entries: seedEntries(SAMPLE + '\n退出登录\n取消', ['en', 'ja', 'ko']), updatedAt: now, sample: true },
       { id: 'product-guide', name: '产品介绍', description: '产品简介与新手引导的多语言文案。', locales: ['en', 'fr', 'ja'], icon: 'book', color: 'blue', entries: seedEntries(DOC_SAMPLE.replace(/\n\n/g, '\n'), ['en', 'fr', 'ja'], false), updatedAt: now, sample: true }
-    ], session: null, jobs: [], exports: [], settings: { includeSource: true, pretty: true }, homeFilter: 'all', search: '', reviewLocale: 'en', reviewIndex: 0 };
+    ], session: null, jobs: [], exports: [], settings: { includeSource: true, pretty: true, translationEmail: '' }, homeFilter: 'all', search: '', reviewLocale: 'en', reviewIndex: 0 };
+  }
+  function migrate(saved) {
+    if (!saved || !Array.isArray(saved.projects) || ![1, 2].includes(saved.version)) return initialState();
+    saved.settings = { includeSource: true, pretty: true, translationEmail: '', ...saved.settings };
+    saved.jobs ||= []; saved.exports ||= [];
+    if (saved.version === 1) {
+      const entries = [...saved.projects.flatMap(p => p.entries), ...(saved.session?.entries || []), ...saved.jobs.flatMap(j => j.entries || [])];
+      entries.forEach(entry => {
+        entry.translationMeta ||= {}; entry.translationRevision ||= {};
+        Object.entries(entry.translations || {}).forEach(([locale, value]) => {
+          if (textOf(value).trim() && !entry.translationMeta[locale]) {
+            entry.translationMeta[locale] = { provider: entry.edited?.[locale] ? 'manual' : 'LegacyDemo', status: 'success', sourceText: entry.source };
+            if (!entry.edited?.[locale]) {
+              entry.translationMeta[locale].legacyReviewed = !!entry.reviewed?.[locale];
+              entry.reviewed ||= {}; entry.reviewed[locale] = false;
+            }
+          }
+        });
+      });
+      saved.jobs.forEach(job => { job.provider ||= 'LegacyDemo'; });
+      saved.version = 2;
+    }
+    saved.jobs.filter(job => job.provider === 'MyMemory').forEach(job => J.normalize(job));
+    return saved;
   }
   let state;
-  try { state = JSON.parse(localStorage.getItem(STORAGE)); if (!state || state.version !== 1 || !Array.isArray(state.projects)) state = initialState(); }
+  try { state = migrate(JSON.parse(localStorage.getItem(STORAGE))); }
   catch { state = initialState(); }
   if (state.session) state.session.importing = false;
   if (state.session?.status === 'running') { state.session.status = 'paused'; const job = state.jobs.find(j => j.id === state.session.jobId); if (job) job.status = 'paused'; }
@@ -82,6 +115,21 @@
   const sessionProject = () => state.projects.find(p => p.id === state.session?.projectId) || currentProject();
   const sessionEntries = () => state.session?.entries || [];
   const selectedEntries = () => sessionEntries().filter(e => e.selected !== false);
+  const sessionJob = () => state.jobs.find(job => job.id === state.session?.jobId);
+  function translationLabel(entry, locale) {
+    const meta = entry.translationMeta?.[locale];
+    if (entry.reviewed?.[locale]) return '已人工确认';
+    if (entry.edited?.[locale]) return '人工译文 · 待确认';
+    if (meta?.provider === 'LegacyDemo') return '历史演示译文';
+    if (meta?.status === 'failed') return '翻译失败';
+    return textOf(entry.translations[locale]).trim() ? 'MyMemory · 待校对' : '待翻译';
+  }
+  function markManual(entry, locale) {
+    entry.edited ||= {}; entry.edited[locale] = true;
+    entry.translationRevision ||= {}; entry.translationRevision[locale] = (entry.translationRevision[locale] || 0) + 1;
+    entry.translationMeta ||= {}; entry.translationMeta[locale] = { provider: 'manual', status: 'success', sourceText: entry.source };
+  }
+  function cancelSingle() { singleController?.abort(); singleController = null; singleRequest = null; }
   const titleFor = { home: '我的项目', project: '项目文案', input: '文本输入', import: '文档导入', languages: '目标语言', translate: '翻译任务', review: '翻译校对', export: 'JSON 导出', tasks: '翻译任务', exports: '导出记录', settings: '偏好设置' };
   function nav(view) { if (['input', 'import', 'languages', 'translate', 'review', 'export'].includes(view) && state.session) state.currentProjectId = state.session.projectId; state.view = view; state.search = ''; persist(); render(); window.scrollTo({ top: 0 }); }
   function toast(message) { const el = $('#toast'); el.textContent = message; el.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('show'), 3200); }
@@ -97,14 +145,14 @@
   function shell(content) {
     const project = currentProject();
     const inFlow = ['project', 'input', 'import', 'languages', 'translate', 'review', 'export'].includes(state.view);
-    return `<aside class="sidebar"><button class="brand" data-action="nav" data-view="home" aria-label="译包，返回项目首页"><div class="brand-logo"><span>译</span><sup>A</sup></div><div><div class="brand-title">译包<span style="font-size:13px;font-weight:400;margin-left:6px;color:#839d8b">LangPack</span></div><div class="brand-sub">让语言，轻松相通</div></div></button><div class="workspace-label">WORKSPACE</div><nav class="main-nav" aria-label="主导航">${navLink('home', '我的项目', 'grid')}${navLink('tasks', '翻译任务', 'tasks')}${navLink('exports', '导出记录', 'download')}${navLink('settings', '偏好设置', 'settings')}</nav><div class="sidebar-bottom"><div class="tip-box">${icon('sparkles')}<h3>从一句中文开始</h3><p>语义 key、多语言翻译、JSON 导出，一次完成。</p><button class="text-button" data-action="help">了解工作流程 ${icon('right')}</button></div><button class="user-button" data-action="nav" data-view="settings"><div class="avatar">L</div><div class="user-info"><strong>我的工作空间</strong><span>保存在当前浏览器</span></div>${icon('down')}</button></div></aside><div class="app-shell"><header class="topbar"><div class="breadcrumb">${icon('folder')}<button data-action="nav" data-view="home">工作空间</button>${icon('chevron')}${inFlow ? `<button data-action="project" data-id="${esc(project?.id || '')}">${esc(project?.name || '项目')}</button>${icon('chevron')}` : ''}<span>${titleFor[state.view]}</span></div><div class="top-actions"><span class="demo-indicator"><i></i>交互原型 · 演示模式</span><button class="icon-button" data-action="help" aria-label="使用帮助">${icon('help')}</button><button class="top-avatar" data-action="nav" data-view="settings" aria-label="工作空间设置">L</button></div></header><main class="main" id="main-content">${content}</main></div><nav class="mobile-bottom" aria-label="底部导航">${navLink('home', '项目', 'grid', true)}${navLink('tasks', '任务', 'tasks', true)}${navLink('exports', '导出', 'download', true)}${navLink('settings', '设置', 'settings', true)}</nav>`;
+    return `<aside class="sidebar"><button class="brand" data-action="nav" data-view="home" aria-label="译包，返回项目首页"><div class="brand-logo"><span>译</span><sup>A</sup></div><div><div class="brand-title">译包<span style="font-size:13px;font-weight:400;margin-left:6px;color:#839d8b">LangPack</span></div><div class="brand-sub">让语言，轻松相通</div></div></button><div class="workspace-label">WORKSPACE</div><nav class="main-nav" aria-label="主导航">${navLink('home', '我的项目', 'grid')}${navLink('tasks', '翻译任务', 'tasks')}${navLink('exports', '导出记录', 'download')}${navLink('settings', '偏好设置', 'settings')}</nav><div class="sidebar-bottom"><div class="tip-box">${icon('sparkles')}<h3>从一句中文开始</h3><p>语义 key、多语言翻译、JSON 导出，一次完成。</p><button class="text-button" data-action="help">了解工作流程 ${icon('right')}</button></div><button class="user-button" data-action="nav" data-view="settings"><div class="avatar">L</div><div class="user-info"><strong>我的工作空间</strong><span>保存在当前浏览器</span></div>${icon('down')}</button></div></aside><div class="app-shell"><header class="topbar"><div class="breadcrumb">${icon('folder')}<button data-action="nav" data-view="home">工作空间</button>${icon('chevron')}${inFlow ? `<button data-action="project" data-id="${esc(project?.id || '')}">${esc(project?.name || '项目')}</button>${icon('chevron')}` : ''}<span>${titleFor[state.view]}</span></div><div class="top-actions"><span class="demo-indicator"><i></i>MyMemory · 真实翻译</span><button class="icon-button" data-action="help" aria-label="使用帮助">${icon('help')}</button><button class="top-avatar" data-action="nav" data-view="settings" aria-label="工作空间设置">L</button></div></header><main class="main" id="main-content">${content}</main></div><nav class="mobile-bottom" aria-label="底部导航">${navLink('home', '项目', 'grid', true)}${navLink('tasks', '任务', 'tasks', true)}${navLink('exports', '导出', 'download', true)}${navLink('settings', '设置', 'settings', true)}</nav>`;
   }
   function pageHead(title, subtitle, action = '', eyebrow = '') { return `<div class="page-head between"><div>${eyebrow ? `<div class="eyebrow">${eyebrow}</div>` : ''}<h1>${title}</h1><p>${subtitle}</p></div>${action}</div>`; }
   function renderHome() {
     const allEntries = state.projects.reduce((s, p) => s + p.entries.length, 0);
     const locales = new Set(state.projects.flatMap(p => p.locales));
     return pageHead('我的项目', '把中文的灵感，带到更广阔的世界。', `<button class="btn primary" data-action="new-project">${icon('plus')}新建项目</button>`, 'YOUR LOCALIZATION WORKSPACE') +
-    `<section class="home-hero"><div class="hero-copy"><div class="eyebrow">WRITE ONCE. REACH EVERYWHERE.</div><h2>从一句中文，<br>到每一种语言。</h2><p>自动生成语义 key，批量翻译多种语言。<br>让繁琐的本地化，变得简单有序。</p><div class="hero-buttons"><button class="btn primary" data-action="quick-start">开始一段翻译 ${icon('right')}</button><button class="btn" data-action="quick-import">${icon('upload')}导入文档</button></div></div><div class="hero-visual" aria-hidden="true"><div class="hero-arrow">${icon('switch')}</div><div class="language-orbit">文 → A</div><div class="language-orbit second">あ</div><div class="code-card"><div class="file-title">${icon('file')}zh-Hans.json</div><pre>{\n  <em>"login"</em>: "登录",\n  <em>"save"</em>: "保存"\n}</pre></div><div class="code-card front"><div class="file-title">${icon('file')}en.json <span style="margin-left:auto;color:#9fc4aa">✓</span></div><pre>{\n  <em>"login"</em>: "Log in",\n  <em>"save"</em>: "Save"\n}</pre></div></div></section><div class="home-stats"><div class="home-stat"><span class="stat-icon">${icon('layers')}</span><div><strong>${state.projects.length.toString().padStart(2, '0')}</strong><p>进行中的项目</p></div></div><div class="home-stat"><span class="stat-icon">${icon('text')}</span><div><strong>${allEntries}</strong><p>已管理的文案</p></div></div><div class="home-stat"><span class="stat-icon">${icon('globe')}</span><div><strong>${locales.size.toString().padStart(2, '0')}</strong><p>覆盖的目标语言</p></div></div></div><div class="toolbar"><div class="tabs"><button class="tab ${state.homeFilter === 'all' ? 'active' : ''}" data-action="filter-projects" data-filter="all">全部项目<span>${state.projects.length}</span></button><button class="tab ${state.homeFilter === 'pending' ? 'active' : ''}" data-action="filter-projects" data-filter="pending">待完善</button></div><label class="search">${icon('search')}<input type="search" id="project-search" placeholder="搜索项目名称…" aria-label="搜索项目名称" value="${esc(state.search)}"></label></div><div class="project-grid" id="project-grid">${projectCards()}</div><div class="section-title"><h2>让本地化，井井有条</h2><span class="muted">四步完成你的语言包</span></div><div class="guide-row">${[['01', '输入或导入', '从中文文本、文档开始'], ['02', '选择语言', '一次选择，多种语言'], ['03', '翻译与校对', '稳定的 key，可编辑的译文'], ['04', '导出语言包', '独立 JSON，随时集成']].map(([n, t, s]) => `<div class="guide-step"><span class="guide-number">${n}</span><div><h3>${t}</h3><p>${s}</p></div></div>`).join('')}</div><footer class="home-footer"><span class="flex">${icon('shield')}文档仅在本地解析 · 内容保存在当前浏览器</span><span>LangPack · Made for every language</span></footer>`;
+    `<section class="home-hero"><div class="hero-copy"><div class="eyebrow">WRITE ONCE. REACH EVERYWHERE.</div><h2>从一句中文，<br>到每一种语言。</h2><p>自动生成语义 key，批量翻译多种语言。<br>让繁琐的本地化，变得简单有序。</p><div class="hero-buttons"><button class="btn primary" data-action="quick-start">开始一段翻译 ${icon('right')}</button><button class="btn" data-action="quick-import">${icon('upload')}导入文档</button></div></div><div class="hero-visual" aria-hidden="true"><div class="hero-arrow">${icon('switch')}</div><div class="language-orbit">文 → A</div><div class="language-orbit second">あ</div><div class="code-card"><div class="file-title">${icon('file')}zh-Hans.json</div><pre>{\n  <em>"login"</em>: "登录",\n  <em>"save"</em>: "保存"\n}</pre></div><div class="code-card front"><div class="file-title">${icon('file')}en.json <span style="margin-left:auto;color:#9fc4aa">✓</span></div><pre>{\n  <em>"login"</em>: "Log in",\n  <em>"save"</em>: "Save"\n}</pre></div></div></section><div class="home-stats"><div class="home-stat"><span class="stat-icon">${icon('layers')}</span><div><strong>${state.projects.length.toString().padStart(2, '0')}</strong><p>进行中的项目</p></div></div><div class="home-stat"><span class="stat-icon">${icon('text')}</span><div><strong>${allEntries}</strong><p>已管理的文案</p></div></div><div class="home-stat"><span class="stat-icon">${icon('globe')}</span><div><strong>${locales.size.toString().padStart(2, '0')}</strong><p>覆盖的目标语言</p></div></div></div><div class="toolbar"><div class="tabs"><button class="tab ${state.homeFilter === 'all' ? 'active' : ''}" data-action="filter-projects" data-filter="all">全部项目<span>${state.projects.length}</span></button><button class="tab ${state.homeFilter === 'pending' ? 'active' : ''}" data-action="filter-projects" data-filter="pending">待完善</button></div><label class="search">${icon('search')}<input type="search" id="project-search" placeholder="搜索项目名称…" aria-label="搜索项目名称" value="${esc(state.search)}"></label></div><div class="project-grid" id="project-grid">${projectCards()}</div><div class="section-title"><h2>让本地化，井井有条</h2><span class="muted">四步完成你的语言包</span></div><div class="guide-row">${[['01', '输入或导入', '从中文文本、文档开始'], ['02', '选择语言', '一次选择，多种语言'], ['03', '翻译与校对', '稳定的 key，可编辑的译文'], ['04', '导出语言包', '独立 JSON，随时集成']].map(([n, t, s]) => `<div class="guide-step"><span class="guide-number">${n}</span><div><h3>${t}</h3><p>${s}</p></div></div>`).join('')}</div><footer class="home-footer"><span class="flex">${icon('shield')}文档本地解析 · 翻译时发送所选原文</span><span>LangPack · Made for every language</span></footer>`;
   }
   function projectCards() {
     const projects = state.projects.filter(p => (!state.search || (p.name + p.description).toLowerCase().includes(state.search.toLowerCase())) && (state.homeFilter !== 'pending' || stats(p).ratio < 100 || p.entries.some(e => p.locales.some(l => !e.reviewed[l]))));
@@ -118,6 +166,7 @@
   function newSession(mode, empty = false) {
     importRequest++;
     if (state.session?.status === 'running') { toast('当前翻译正在进行，请先完成或取消该任务。'); return nav('translate'); }
+    cancelSingle();
     const p = currentProject();
     state.session = { id: uid(), projectId: p.id, mode, text: '', split: 'line', context: '', entries: [], locales: p.locales.length ? [...p.locales] : ['en', 'ja', 'ko'], status: 'draft', fileName: '', includeSource: state.settings.includeSource, exportLocales: [], pretty: state.settings.pretty, committed: false };
     state.reviewIndex = 0;
@@ -147,84 +196,99 @@
   }
   function renderInput() {
     const s = state.session;
-    return workflowHeader(0, '添加你的中文文案', '每一句表达，都值得被更多人读懂。') + `<div class="two-columns"><section class="panel input-panel"><div class="panel-head"><div class="input-tabs grow"><button class="input-tab active" data-action="switch-mode" data-mode="text">${icon('text')}文本输入</button><button class="input-tab" data-action="switch-mode" data-mode="document">${icon('upload')}文档导入</button></div></div><div class="panel-body"><div class="between" style="margin-bottom:10px"><label class="field-label" for="source-text" style="margin:0">中文原文</label><button class="text-button" data-action="fill-example">${icon('sparkles')}使用示例</button></div><textarea class="field source-area" id="source-text" placeholder="输入中文文案，每行一条，例如：&#10;登录&#10;注册账号&#10;欢迎回来，{name}" spellcheck="false">${esc(s.text)}</textarea><div class="textarea-meta"><span id="source-count">${s.text.length} 字符 · ${s.entries.length} 条文案</span><span>支持 {name} 等占位符</span></div><div class="split-options"><span>拆分方式</span><label class="radio-label"><input type="radio" name="split" value="line" ${s.split === 'line' ? 'checked' : ''}>一行一条</label><label class="radio-label"><input type="radio" name="split" value="paragraph" ${s.split === 'paragraph' ? 'checked' : ''}>按空行分段</label></div><label class="field-label context-label" for="context">使用场景 <span class="muted">（选填）</span></label><textarea class="field context-field" id="context" placeholder="例如：一款效率工具的登录与设置页面">${esc(s.context)}</textarea></div><div class="panel-footer"><div class="notice">${icon('shield')}<span>key 生成后保持稳定，修改译文不会影响代码引用。演示以常见文案词典生成 key，自定义内容可手动命名。</span></div></div></section><section class="panel preview-panel"><div class="panel-head"><h2>语义 key 预览</h2><span class="badge ok" id="preview-count">${s.entries.length} 条</span></div><div class="panel-body" id="key-preview">${previewRows()}</div><div class="panel-footer"><div class="flex small muted">${icon('key')}<span>英文小写 + 下划线 · 点击 key 可编辑</span></div></div></section></div>${flowFooter('to-languages', '下一步：选择语言', '支持多条输入，自动拆分生成 key', false, !s.entries.length)}`;
+    return workflowHeader(0, '添加你的中文文案', '每一句表达，都值得被更多人读懂。') + `<div class="two-columns"><section class="panel input-panel"><div class="panel-head"><div class="input-tabs grow"><button class="input-tab active" data-action="switch-mode" data-mode="text">${icon('text')}文本输入</button><button class="input-tab" data-action="switch-mode" data-mode="document">${icon('upload')}文档导入</button></div></div><div class="panel-body"><div class="between" style="margin-bottom:10px"><label class="field-label" for="source-text" style="margin:0">中文原文</label><button class="text-button" data-action="fill-example">${icon('sparkles')}使用示例</button></div><textarea class="field source-area" id="source-text" placeholder="输入中文文案，每行一条，例如：&#10;登录&#10;注册账号&#10;欢迎回来，{name}" spellcheck="false">${esc(s.text)}</textarea><div class="textarea-meta"><span id="source-count">${s.text.length} 字符 · ${s.entries.length} 条文案</span><span>支持 {name} 等占位符</span></div><div class="split-options"><span>拆分方式</span><label class="radio-label"><input type="radio" name="split" value="line" ${s.split === 'line' ? 'checked' : ''}>一行一条</label><label class="radio-label"><input type="radio" name="split" value="paragraph" ${s.split === 'paragraph' ? 'checked' : ''}>按空行分段</label></div><label class="field-label context-label" for="context">使用场景 <span class="muted">（选填）</span></label><textarea class="field context-field" id="context" placeholder="例如：一款效率工具的登录与设置页面">${esc(s.context)}</textarea></div><div class="panel-footer"><div class="notice">${icon('shield')}<span>key 生成后保持稳定，修改译文不会影响代码引用。key 按常用文案规则生成，自定义内容可手动命名。</span></div></div></section><section class="panel preview-panel"><div class="panel-head"><h2>语义 key 预览</h2><span class="badge ok" id="preview-count">${s.entries.length} 条</span></div><div class="panel-body" id="key-preview">${previewRows()}</div><div class="panel-footer"><div class="flex small muted">${icon('key')}<span>英文小写 + 下划线 · 点击 key 可编辑</span></div></div></section></div>${flowFooter('to-languages', '下一步：选择语言', '支持多条输入，自动拆分生成 key', false, !s.entries.length)}`;
   }
   function documentRows() {
     return sessionEntries().map((entry, i) => `<div class="doc-row"><input type="checkbox" data-doc-select="${i}" ${entry.selected ? 'checked' : ''} aria-label="选择第 ${i + 1} 段"><div><label class="field-label" style="margin-bottom:5px">${String(i + 1).padStart(2, '0')} · ${entry.sourceType === 'heading' ? '标题' : entry.sourceType === 'table-cell' || entry.sourceType === 'table' ? '表格' : '正文段落'}</label><textarea class="field" data-doc-source="${i}" rows="2" aria-label="第 ${i + 1} 段原文">${esc(entry.source)}</textarea><input class="key-field" data-key-index="${i}" value="${esc(entry.key)}" aria-label="第 ${i + 1} 段 key"><div class="doc-actions">${i < sessionEntries().length - 1 ? `<button data-action="merge-paragraph" data-index="${i}">与下段合并</button>` : ''}<button data-action="split-paragraph" data-index="${i}">按句拆分</button>${entry.keyGenerated === 'fallback' ? '<span class="muted">key 可手动命名</span>' : ''}</div></div></div>`).join('');
   }
   function renderImport() {
     const s = state.session;
-    return workflowHeader(0, '从一份文档开始', '按段落整理，完整保留你的表达。') + `<div class="two-columns"><section class="panel input-panel"><div class="panel-head"><div class="input-tabs grow"><button class="input-tab" data-action="switch-mode" data-mode="text">${icon('text')}文本输入</button><button class="input-tab active" data-action="switch-mode" data-mode="document">${icon('upload')}文档导入</button></div></div><div class="panel-body"><input id="file-input" class="hidden" type="file" accept=".txt,.md,.markdown,.docx">${s.fileName ? `<div class="file-loaded"><div class="tag-icon">${icon('file')}</div><div class="grow"><h3>${esc(s.fileName)}</h3><p>${s.entries.length} 个内容块 · ${selectedEntries().length} 个已选择</p></div><button class="icon-button" data-action="pick-file" aria-label="重新选择文件">${icon('refresh')}</button></div><div style="height:16px"></div>` : ''}<div class="drop-zone" id="drop-zone"><span class="drop-icon">${icon('upload')}</span><h3>拖入文档，开始你的多语言旅程</h3><p>支持 TXT、Markdown、DOCX · 最大 10 MB</p><button class="btn" data-action="pick-file">${icon('folder')}选择文档</button></div><div class="doc-sample"><span>${icon('file')}</span><div class="grow"><h3>先用示例文档体验</h3><p>产品介绍.md · 4 个中文段落</p></div><button class="btn small-btn soft" data-action="load-doc-example">载入示例</button></div><label class="field-label context-label" for="context">文档使用场景 <span class="muted">（选填）</span></label><textarea class="field context-field" id="context" placeholder="例如：产品官网的功能介绍">${esc(s.context)}</textarea><div id="import-error" class="error-text" role="alert"></div></div><div class="panel-footer"><div class="notice">${icon('shield')}<span>文件在当前浏览器解析，不会上传。标题、段落、列表和表格内容将分别提取，翻译前可调整。</span></div></div></section><section class="panel preview-panel"><div class="panel-head"><h2>段落预览</h2><span class="badge ok">${selectedEntries().length} / ${s.entries.length} 已选</span></div><div class="panel-body document-list" style="display:block">${s.entries.length ? `<div class="bulk-actions"><button class="text-button" data-action="select-paragraphs">全选 / 取消全选</button><span>勾选需要翻译的内容</span></div>${documentRows()}` : `<div class="empty-preview">${icon('file')}<p>导入后，在这里预览与调整段落</p></div>`}</div></section></div>${flowFooter('to-languages', '下一步：选择语言', '先预览，再翻译；每段对应一个 key', false, !selectedEntries().length)}`;
+    return workflowHeader(0, '从一份文档开始', '按段落整理，完整保留你的表达。') + `<div class="two-columns"><section class="panel input-panel"><div class="panel-head"><div class="input-tabs grow"><button class="input-tab" data-action="switch-mode" data-mode="text">${icon('text')}文本输入</button><button class="input-tab active" data-action="switch-mode" data-mode="document">${icon('upload')}文档导入</button></div></div><div class="panel-body"><input id="file-input" class="hidden" type="file" accept=".txt,.md,.markdown,.docx">${s.fileName ? `<div class="file-loaded"><div class="tag-icon">${icon('file')}</div><div class="grow"><h3>${esc(s.fileName)}</h3><p>${s.entries.length} 个内容块 · ${selectedEntries().length} 个已选择</p></div><button class="icon-button" data-action="pick-file" aria-label="重新选择文件">${icon('refresh')}</button></div><div style="height:16px"></div>` : ''}<div class="drop-zone" id="drop-zone"><span class="drop-icon">${icon('upload')}</span><h3>拖入文档，开始你的多语言旅程</h3><p>支持 TXT、Markdown、DOCX · 最大 10 MB</p><button class="btn" data-action="pick-file">${icon('folder')}选择文档</button></div><div class="doc-sample"><span>${icon('file')}</span><div class="grow"><h3>先用示例文档体验</h3><p>产品介绍.md · 4 个中文段落</p></div><button class="btn small-btn soft" data-action="load-doc-example">载入示例</button></div><label class="field-label context-label" for="context">文档使用场景 <span class="muted">（选填）</span></label><textarea class="field context-field" id="context" placeholder="例如：产品官网的功能介绍">${esc(s.context)}</textarea><div id="import-error" class="error-text" role="alert"></div></div><div class="panel-footer"><div class="notice">${icon('shield')}<span>文档文件在本地解析；开始翻译后，选中的段落会发送给 MyMemory。请先调整需要翻译的内容。</span></div></div></section><section class="panel preview-panel"><div class="panel-head"><h2>段落预览</h2><span class="badge ok">${selectedEntries().length} / ${s.entries.length} 已选</span></div><div class="panel-body document-list" style="display:block">${s.entries.length ? `<div class="bulk-actions"><button class="text-button" data-action="select-paragraphs">全选 / 取消全选</button><span>勾选需要翻译的内容</span></div>${documentRows()}` : `<div class="empty-preview">${icon('file')}<p>导入后，在这里预览与调整段落</p></div>`}</div></section></div>${flowFooter('to-languages', '下一步：选择语言', '先预览，再翻译；每段对应一个 key', false, !selectedEntries().length)}`;
   }
   function renderLanguages() {
     const s = state.session;
     const chars = selectedEntries().reduce((sum, e) => sum + e.source.length, 0);
-    return workflowHeader(1, '想让哪些语言读懂你？', '一次多选，为每种语言生成独立的翻译结果。') + `<div class="language-layout"><section class="panel"><div class="panel-head"><h2>选择目标语言</h2><button class="text-button" data-action="toggle-all-languages">${s.locales.length === LANGS.length ? '取消全选' : '选择全部'}</button></div><div class="panel-body"><p class="subheading">源语言：简体中文 · zh-Hans</p><div class="language-grid">${LANGS.map(l => `<label class="language-option ${s.locales.includes(l.code) ? 'selected' : ''} ${l.code === 'zh-Hant' ? 'zh-option' : ''}"><span class="language-code ${l.code}">${l.label}</span><span class="language-label"><strong>${l.name}</strong><span>${l.native} · ${l.code}</span></span><input type="checkbox" data-locale="${l.code}" ${s.locales.includes(l.code) ? 'checked' : ''} aria-label="选择${l.name}"></label>`).join('')}</div></div></section><aside class="panel selected-summary"><div><h3>这次的翻译计划</h3><div class="selected-languages">${s.locales.length ? s.locales.map(l => `<span class="selected-chip">${lang(l).name}<button data-action="remove-locale" data-locale="${l}" aria-label="移除${lang(l).name}">×</button></span>`).join('') : '<span class="small muted">至少选择一种目标语言</span>'}</div></div><div class="divider"></div><div><div class="summary-row"><span>中文文案</span><strong>${selectedEntries().length} 条</strong></div><div class="summary-row"><span>目标语言</span><strong>${s.locales.length} 种</strong></div><div class="summary-row"><span>原文字符</span><strong>${chars}</strong></div><div class="summary-row summary-total"><span>预计生成</span><strong>${selectedEntries().length * s.locales.length}<span style="font-size:11px;letter-spacing:0;margin-left:5px">条译文</span></strong></div></div><div class="service-box"><div class="flex"><span class="flex">${icon('sparkles')}演示翻译引擎</span><span class="badge ok">本地运行</span></div><p>预置常见文案的七语言示例。自定义文案保留待补译状态，可在下一步手动填写。</p></div><div class="notice" style="margin-top:16px">${icon('shield')}<span>本原型不调用付费接口，不产生翻译费用。</span></div></aside></div>${flowFooter('start-translation', '开始翻译', '', true, !s.locales.length)}`;
+    return workflowHeader(1, '想让哪些语言读懂你？', '一次多选，为每种语言生成独立的翻译结果。') + `<div class="language-layout"><section class="panel"><div class="panel-head"><h2>选择目标语言</h2><button class="text-button" data-action="toggle-all-languages">${s.locales.length === LANGS.length ? '取消全选' : '选择全部'}</button></div><div class="panel-body"><p class="subheading">源语言：简体中文 · zh-Hans</p><div class="language-grid">${LANGS.map(l => `<label class="language-option ${s.locales.includes(l.code) ? 'selected' : ''} ${l.code === 'zh-Hant' ? 'zh-option' : ''}"><span class="language-code ${l.code}">${l.label}</span><span class="language-label"><strong>${l.name}</strong><span>${l.native} · ${l.code}</span></span><input type="checkbox" data-locale="${l.code}" ${s.locales.includes(l.code) ? 'checked' : ''} aria-label="选择${l.name}"></label>`).join('')}</div></div></section><aside class="panel selected-summary"><div><h3>这次的翻译计划</h3><div class="selected-languages">${s.locales.length ? s.locales.map(l => `<span class="selected-chip">${lang(l).name}<button data-action="remove-locale" data-locale="${l}" aria-label="移除${lang(l).name}">×</button></span>`).join('') : '<span class="small muted">至少选择一种目标语言</span>'}</div></div><div class="divider"></div><div><div class="summary-row"><span>中文文案</span><strong>${selectedEntries().length} 条</strong></div><div class="summary-row"><span>目标语言</span><strong>${s.locales.length} 种</strong></div><div class="summary-row"><span>原文字符</span><strong>${chars}</strong></div><div class="summary-row summary-total"><span>预计生成</span><strong>${selectedEntries().length * s.locales.length}<span style="font-size:11px;letter-spacing:0;margin-left:5px">条译文</span></strong></div></div><div class="service-box"><div class="flex"><span class="flex">${icon('sparkles')}MyMemory 翻译服务</span><span class="badge ok">真实 API</span></div><p>原文按不超过 480 UTF-8 字节拆分，逐段请求后合并。短暂故障自动重试，失败项可单独重试。</p></div><div class="notice" style="margin-top:16px">${icon('shield')}<span>点击开始翻译后，所选原文会发送给 MyMemory。匿名免费额度为每天 5,000 字符，多语言会累计用量。</span></div></aside></div>${flowFooter('start-translation', '开始翻译', '', true, !s.locales.length)}`;
   }
   function progressData() {
-    const s = state.session;
-    const entries = selectedEntries();
-    const total = entries.length * s.locales.length;
-    return { total, done: s.processed || 0, ratio: total ? Math.round((s.processed || 0) / total * 100) : 0 };
+    const job = sessionJob();
+    if (job?.provider === 'MyMemory') return J.summary(job);
+    const total = selectedEntries().length * state.session.locales.length;
+    return { total, processed: 0, success: 0, failed: 0, pending: total, skipped: 0, ratio: 0 };
   }
   function renderTranslate() {
-    const s = state.session;
+    const s = state.session, job = sessionJob();
     const progress = progressData();
-    const finished = s.status === 'completed';
-    const missing = E.validate(selectedEntries(), s.locales).filter(i => i.type === 'missing').length;
-    const paused = s.status === 'paused' || s.status === 'canceled';
-    return workflowHeader(2, '正在连接更多语言', '翻译结果会逐条保存，你可以随时回来看。') + `<section class="panel translation-center"><div class="translation-emblem ${!finished && !paused ? 'running' : ''}">${icon(finished ? 'circlecheck' : 'globe')}</div><h2>${finished ? '翻译整理完成' : paused ? '任务已暂停' : '让你的表达，跨越语言'}</h2><p>${finished ? missing ? `${missing} 条自定义文案待手动补译，其他结果已保存` : '选中的所有语言已生成演示译文，接下来一起校对' : paused ? '已完成的结果会保留，继续即可从断点恢复' : `${selectedEntries().length} 条中文文案 · ${s.locales.length} 种目标语言`}</p><div class="translation-progress" role="progressbar" aria-label="翻译进度" aria-valuenow="${progress.ratio}" aria-valuemin="0" aria-valuemax="100"><div style="width:${progress.ratio}%"></div></div><div class="progress-meta"><span>${progress.done} / ${progress.total} 已处理</span><span>${progress.ratio}%</span></div><div class="locale-progress">${s.locales.map((l, i) => { const count = Math.min(selectedEntries().length, Math.max(0, progress.done - i * selectedEntries().length)); return `<div class="locale-progress-row"><span class="language-code ${l}">${lang(l).label}</span><span>${lang(l).name}</span><div class="mini-progress"><i style="width:${selectedEntries().length ? count / selectedEntries().length * 100 : 0}%"></i></div><span>${count} / ${selectedEntries().length}</span></div>`; }).join('')}</div><div class="notice">${icon('sparkles')}<span>这是可交互的演示流程，当前使用本地示例译文。自定义内容不会被伪装成已翻译。</span></div>${finished ? `<button class="btn primary" data-action="to-review">开始校对译文 ${icon('right')}</button>` : paused ? `<button class="btn primary" data-action="resume-translation">${icon('refresh')}继续翻译</button>` : `<button class="btn ghost" data-action="pause-translation">暂停任务</button>`}</section>`;
+    const real = job?.provider === 'MyMemory';
+    const finished = ['completed', 'partial'].includes(s.status);
+    const running = s.status === 'running';
+    const quota = s.status === 'quota';
+    const failed = (job?.items || []).filter(item => item.status === 'failed');
+    const active = job?.activeItem;
+    const heading = !real ? '历史演示任务' : quota ? '今日免费额度已用完' : finished ? progress.failed ? '部分译文需要重试' : '翻译已完成' : running ? '正在通过 MyMemory 翻译' : '任务已暂停';
+    const subtitle = !real ? '旧译文已保留，可以重新提交未确认文案进行真实翻译。' : quota ? '已完成的译文会保留，剩余内容不会继续发送。' : finished ? `成功 ${progress.success} · 失败 ${progress.failed} · 保留已有 ${progress.skipped}` : running ? `${selectedEntries().length} 条文案 · ${s.locales.length} 种目标语言 · 请求按顺序发送` : '继续任务会处理剩余内容，已成功的译文无需重复请求。';
+    return workflowHeader(2, '正在连接更多语言', '真实翻译，逐条保存；长段落仍对应同一个 key。') + `<section class="panel translation-center"><div class="translation-emblem ${running ? 'running' : ''}">${icon(finished && !progress.failed ? 'circlecheck' : quota ? 'alert' : 'globe')}</div><h2>${heading}</h2><p>${subtitle}</p><div class="translation-progress" role="progressbar" aria-label="翻译进度" aria-valuenow="${progress.ratio}" aria-valuemin="0" aria-valuemax="100"><div style="width:${progress.ratio}%"></div></div><div class="progress-meta"><span>${progress.processed} / ${progress.total} 已处理</span><span>${progress.ratio}%</span></div><div class="locale-progress">${s.locales.map(l => {
+      const items = (job?.items || []).filter(item => item.locale === l);
+      const count = items.filter(item => ['success', 'failed', 'skipped'].includes(item.status)).length;
+      const errors = items.filter(item => item.status === 'failed').length;
+      return `<div class="locale-progress-row"><span class="language-code ${l}">${lang(l).label}</span><span>${lang(l).name}</span><div class="mini-progress"><i style="width:${items.length ? count / items.length * 100 : 0}%"></i></div><span>${count} / ${items.length || selectedEntries().length}${errors ? ` · ${errors} 失败` : ''}</span></div>`;
+    }).join('')}</div>${active && running ? `<div class="active-translation" aria-live="polite"><span class="spinner"></span><span>${lang(active.locale).name} · ${esc(active.key || '')}${active.total ? ` · 分段 ${active.completed || 0} / ${active.total}` : ''}${active.retry ? ` · 第 ${active.retry.attempt} 次重试` : ''}</span></div>` : ''}${failed.length ? `<div class="translation-errors">${failed.slice(0, 8).map(item => `<div class="translation-error"><div class="grow"><strong>${esc(sessionEntries().find(e => e.id === item.entryId)?.key || item.entryId)} · ${lang(item.locale).name}</strong><p>${esc(item.error?.message || '翻译失败，请稍后重试。')}</p></div><button class="text-button" data-action="inspect-failed" data-entry-id="${esc(item.entryId)}" data-locale="${item.locale}">校对</button></div>`).join('')}${failed.length > 8 ? `<p class="caption">还有 ${failed.length - 8} 项，可在校对页查看。</p>` : ''}</div>` : ''}<div class="notice ${quota ? 'warning' : ''}">${icon('shield')}<span>${quota ? '匿名额度为每天 5,000 字符。可稍后手动重试，或在设置中填写自己的有效联系邮箱，按服务商规则使用更高日额度。' : '原文分段发送给 MyMemory；失败项保留原因，错误提示不会写入译文。关闭页面会中断任务，重新打开后可继续。'}</span></div><div class="translation-buttons">${running ? '<button class="btn ghost" data-action="pause-translation">暂停任务</button>' : real ? `${progress.failed || quota ? `<button class="btn primary" data-action="retry-failed">${icon('refresh')}重试失败与未完成项</button>` : ''}${progress.pending && !quota ? `<button class="btn primary" data-action="resume-translation">${icon('refresh')}继续翻译</button>` : ''}<button class="btn ${finished && !progress.failed ? 'primary' : ''}" data-action="to-review">${finished ? '开始校对译文' : '校对已保存结果'}${icon('right')}</button>` : `<button class="btn primary" data-action="start-translation">使用 MyMemory 真实翻译${icon('right')}</button>`}</div></section>`;
   }
-  function commitSession() {
-    const s = state.session;
+  function commitSession(s = state.session) {
+    if (!s) return;
     const p = state.projects.find(p => p.id === s.projectId);
     if (!p) return;
-    selectedEntries().forEach(entry => { const index = p.entries.findIndex(e => e.id === entry.id); if (index >= 0) p.entries[index] = entry; else p.entries.push(entry); });
+    (s.entries || []).filter(e => e.selected !== false).forEach(entry => { const index = p.entries.findIndex(e => e.id === entry.id); if (index >= 0) p.entries[index] = entry; else p.entries.push(entry); });
     p.locales = [...new Set([...p.locales, ...s.locales])];
     p.updatedAt = new Date().toISOString();
     s.committed = true;
   }
-  function processTranslation() {
-    const s = state.session;
-    if (!s || s.status !== 'running') return;
-    const entries = selectedEntries();
-    const total = entries.length * s.locales.length;
-    if (s.processed >= total) {
-      s.status = 'completed';
-      commitSession();
-      const job = state.jobs.find(j => j.id === s.jobId);
-      if (job) { job.status = 'completed'; job.processed = total; job.entries = entries; job.missing = E.validate(entries, s.locales).filter(i => i.type === 'missing').length; }
-      persist();
-      if (state.view === 'translate' || state.view === 'tasks') render();
-      else toast('翻译整理完成，可以进入任务页校对。');
-      return;
-    }
-    const index = s.processed % entries.length;
-    const locale = s.locales[Math.floor(s.processed / entries.length)];
-    const entry = entries[index];
-    if (!textOf(entry.translations[locale]).trim()) entry.translations[locale] = E.translate(entry.source, locale).text;
-    s.processed++;
-    const job = state.jobs.find(j => j.id === s.jobId);
-    if (job) { job.processed = s.processed; job.entries = entries; }
-    persist();
-    if (state.view === 'translate') render();
-    translationTimer = setTimeout(processTranslation, Math.max(70, Math.min(160, 2300 / total)));
+  function pauseTranslation(announce = true) {
+    const s = state.session, job = sessionJob();
+    batchGeneration++;
+    batchController?.abort(); batchController = null;
+    if (job?.provider === 'MyMemory') { J.normalize(job); job.status = 'paused'; job.activeItem = null; }
+    if (s) s.status = 'paused';
+    commitSession(s); persist(); render();
+    if (announce) toast('任务已暂停，已保存结果不会丢失。');
   }
-  function startTranslation(resume = false) {
+  async function startTranslation(resume = false, retry = false) {
     const s = state.session;
+    if (!s || s.status === 'running' || batchController) return;
     if (!s.locales.length || !selectedEntries().length) return toast('请先添加文案并选择目标语言。');
-    if (!resume) {
+    cancelSingle();
+    let job = sessionJob();
+    if (!resume || job?.provider !== 'MyMemory') {
       s.entries = selectedEntries();
-      s.processed = 0;
-      commitSession();
-      s.jobId = uid();
-      state.jobs.unshift({ id: s.jobId, projectId: s.projectId, projectName: currentProject().name, total: s.entries.length * s.locales.length, processed: 0, count: s.entries.length, locales: [...s.locales], status: 'running', createdAt: new Date().toISOString(), entries: s.entries });
-    }
-    s.status = 'running';
-    const job = state.jobs.find(j => j.id === s.jobId); if (job) job.status = 'running';
+      commitSession(s);
+      job = J.createJob({ id: uid(), projectId: s.projectId, projectName: sessionProject().name, entries: s.entries, locales: [...s.locales] });
+      s.jobId = job.id;
+      state.jobs.unshift(job);
+    } else if (retry) J.retryFailed(job);
+    const generation = ++batchGeneration;
+    const controller = new AbortController();
+    batchController = controller;
+    s.status = 'running'; job.status = 'running';
     nav('translate');
-    clearTimeout(translationTimer);
-    translationTimer = setTimeout(processTranslation, 380);
+    const current = () => generation === batchGeneration && state.session?.id === s.id && !controller.signal.aborted;
+    try {
+      await J.run(job, { entries: s.entries, client: translationClient(), signal: controller.signal, onChange() {
+        if (!current()) return;
+        s.status = job.status;
+        s.processed = J.summary(job).processed;
+        commitSession(s); persist();
+        if (['translate', 'tasks'].includes(state.view)) render();
+      } });
+      if (!current()) return;
+      s.status = job.status; s.processed = J.summary(job).processed;
+      commitSession(s); persist();
+      if (['translate', 'tasks'].includes(state.view)) render();
+      else toast(job.status === 'quota' ? 'MyMemory 免费额度已用完，任务已暂停。' : '翻译任务已更新，可进入任务页查看。');
+    } catch (error) {
+      if (!current()) return;
+      J.normalize(job); job.status = 'paused'; s.status = 'paused';
+      persist(); render(); toast(error.message || '任务已暂停，请稍后重试。');
+    } finally { if (generation === batchGeneration) batchController = null; }
   }
   function currentReviewEntry() { const entries = selectedEntries(); state.reviewIndex = Math.max(0, Math.min(state.reviewIndex, entries.length - 1)); return entries[state.reviewIndex]; }
   function reviewIssues() { return E.validate(selectedEntries(), state.session.locales); }
@@ -239,7 +303,7 @@
     const completed = entries.filter(e => textOf(e.translations[l]).trim()).length;
     const value = textOf(entry.translations[l]);
     const entryIssues = issues.filter(i => i.entryId === entry.id && (!i.locale || i.locale === l));
-    return workflowHeader(3, '让每一句，都恰如其分', '逐条检查与调整，译文和 key 都由你掌控。') + `<div class="review-toolbar"><div class="review-tabs">${s.locales.map(code => `<button class="review-tab ${code === l ? 'active' : ''}" data-action="review-locale" data-locale="${code}">${lang(code).name}<span class="mono" style="font-size:9px;opacity:.6">${lang(code).label}</span></button>`).join('')}</div><span class="badge ${completed === entries.length ? 'ok' : 'warn'}">${completed} / ${entries.length} 已有译文</span></div><div class="review-layout"><aside class="panel entry-list">${entries.map((e, i) => `<button class="entry-button ${i === state.reviewIndex ? 'active' : ''}" data-action="review-entry" data-index="${i}" aria-label="校对 ${esc(e.source)}"><span class="status-circle ${!textOf(e.translations[l]).trim() ? 'missing' : e.reviewed[l] ? 'complete' : ''}">${!textOf(e.translations[l]).trim() ? '!' : e.reviewed[l] ? '✓' : ''}</span><span class="grow"><span class="source-text">${esc(e.source)}</span><span class="mono">${esc(e.key)}</span></span></button>`).join('')}</aside><section class="panel review-card"><div class="panel-head"><h3>文案 ${String(state.reviewIndex + 1).padStart(2, '0')}</h3><span class="badge ${entry.reviewed[l] ? 'ok' : !value ? 'warn' : 'neutral'}">${entry.reviewed[l] ? '已人工确认' : !value ? '待补译' : entry.edited?.[l] ? '人工译文 · 待确认' : '演示译文 · 待校对'}</span></div><div class="panel-body"><div class="review-source-label"><span>ZH</span>简体中文 · 原文</div><div class="review-source">${esc(entry.source)}</div><div class="review-key"><label for="review-key">语义 key</label><input class="field" id="review-key" value="${esc(entry.key)}" spellcheck="false">${icon('key')}</div><div class="between"><label class="field-label" for="review-text" style="margin:0">${lang(l).name}译文 <span class="muted">${lang(l).native}</span></label><button class="text-button" data-action="retranslate">${icon('refresh')}重译</button></div><textarea id="review-text" class="field review-field" placeholder="${value ? '' : '该文案没有预置译文，请在这里填写' }" spellcheck="false">${esc(value)}</textarea><div id="entry-errors" class="error-text" role="alert">${entryIssues.map(i => esc(i.message)).join('<br>')}</div><div class="review-actions"><label><input type="checkbox" id="review-confirm" ${entry.reviewed[l] ? 'checked' : ''} ${!value.trim() ? 'disabled' : ''}>我已检查并确认这条译文</label><button class="btn small-btn soft" data-action="save-review">${icon('check')}保存译文</button></div><div class="review-pagination"><button class="btn" data-action="review-prev" ${!state.reviewIndex ? 'disabled' : ''}>${icon('left')}上一条</button><span>${state.reviewIndex + 1} / ${entries.length}</span><button class="btn" data-action="review-next" ${state.reviewIndex >= entries.length - 1 ? 'disabled' : ''}>下一条${icon('right')}</button></div></div></section></div><div class="quality-bar ${issues.length ? 'warning' : ''}" id="quality-bar">${icon(issues.length ? 'alert' : 'shield')}<span>${issues.length ? `发现 ${issues.length} 项待处理问题，导出前需要检查。` : '完整性检查通过：key 唯一、译文齐全、占位符保持一致。'}</span><button class="text-button" data-action="show-issues">查看检查${icon('right')}</button></div>${flowFooter('to-export', '下一步：导出 JSON', '')}`;
+    return workflowHeader(3, '让每一句，都恰如其分', '逐条检查与调整，译文和 key 都由你掌控。') + `<div class="review-toolbar"><div class="review-tabs">${s.locales.map(code => `<button class="review-tab ${code === l ? 'active' : ''}" data-action="review-locale" data-locale="${code}">${lang(code).name}<span class="mono" style="font-size:9px;opacity:.6">${lang(code).label}</span></button>`).join('')}</div><span class="badge ${completed === entries.length ? 'ok' : 'warn'}">${completed} / ${entries.length} 已有译文</span></div><div class="review-layout"><aside class="panel entry-list">${entries.map((e, i) => `<button class="entry-button ${i === state.reviewIndex ? 'active' : ''}" data-action="review-entry" data-index="${i}" aria-label="校对 ${esc(e.source)}"><span class="status-circle ${!textOf(e.translations[l]).trim() ? 'missing' : e.reviewed[l] ? 'complete' : ''}">${!textOf(e.translations[l]).trim() ? '!' : e.reviewed[l] ? '✓' : ''}</span><span class="grow"><span class="source-text">${esc(e.source)}</span><span class="mono">${esc(e.key)}</span></span></button>`).join('')}</aside><section class="panel review-card"><div class="panel-head"><h3>文案 ${String(state.reviewIndex + 1).padStart(2, '0')}</h3><span class="badge ${entry.reviewed[l] ? 'ok' : !value ? 'warn' : 'neutral'}">${translationLabel(entry, l)}</span></div><div class="panel-body"><div class="review-source-label"><span>ZH</span>简体中文 · 原文</div><div class="review-source">${esc(entry.source)}</div><div class="review-key"><label for="review-key">语义 key</label><input class="field" id="review-key" value="${esc(entry.key)}" spellcheck="false">${icon('key')}</div><div class="between"><label class="field-label" for="review-text" style="margin:0">${lang(l).name}译文 <span class="muted">${lang(l).native}</span></label><button class="text-button" data-action="retranslate" ${singleRequest?.entryId === entry.id && singleRequest?.locale === l ? 'disabled' : ''}>${icon('refresh')}${singleRequest?.entryId === entry.id && singleRequest?.locale === l ? '翻译中…' : '重译'}</button></div><textarea id="review-text" class="field review-field" placeholder="${value ? '' : '译文尚未生成，可在这里手动补充，或点击重译' }" spellcheck="false">${esc(value)}</textarea><div id="entry-errors" class="error-text" role="alert">${entryIssues.map(i => esc(i.message)).join('<br>')}</div><div class="review-actions"><label><input type="checkbox" id="review-confirm" ${entry.reviewed[l] ? 'checked' : ''} ${!value.trim() ? 'disabled' : ''}>我已检查并确认这条译文</label><button class="btn small-btn soft" data-action="save-review">${icon('check')}保存译文</button></div><div class="review-pagination"><button class="btn" data-action="review-prev" ${!state.reviewIndex ? 'disabled' : ''}>${icon('left')}上一条</button><span>${state.reviewIndex + 1} / ${entries.length}</span><button class="btn" data-action="review-next" ${state.reviewIndex >= entries.length - 1 ? 'disabled' : ''}>下一条${icon('right')}</button></div></div></section></div><div class="quality-bar ${issues.length ? 'warning' : ''}" id="quality-bar">${icon(issues.length ? 'alert' : 'shield')}<span>${issues.length ? `发现 ${issues.length} 项待处理问题，导出前需要检查。` : '完整性检查通过：key 唯一、译文齐全、占位符保持一致。'}</span><button class="text-button" data-action="show-issues">查看检查${icon('right')}</button></div>${flowFooter('to-export', '下一步：导出 JSON', '')}`;
   }
   function saveReview(showToast = false) {
     const entry = currentReviewEntry();
@@ -249,11 +313,11 @@
     const project = sessionProject();
     if (!/^[a-z][a-z0-9_]{0,79}$/.test(key)) { $('#entry-errors').textContent = 'key 请使用小写英文、数字和下划线，以字母开头。'; return false; }
     if (sessionEntries().some(e => e.id !== entry.id && e.key === key) || project.entries.some(e => e.id !== entry.id && e.key === key)) { $('#entry-errors').textContent = '项目中已存在这个 key，请使用不同名称。'; return false; }
-    const changed = entry.translations[state.reviewLocale] !== value;
+    const changed = textOf(entry.translations[state.reviewLocale]) !== value;
     entry.key = key;
     entry.translations[state.reviewLocale] = value;
     entry.reviewed[state.reviewLocale] = !!$('#review-confirm').checked && !!value.trim();
-    if (changed) { entry.edited = entry.edited || {}; entry.edited[state.reviewLocale] = true; }
+    if (changed) markManual(entry, state.reviewLocale);
     commitSession(); persist();
     if (showToast) { render(); toast('译文已保存，语言包预览会同步更新。'); }
     return true;
@@ -284,18 +348,23 @@
     const p = currentProject();
     if (!p) return renderHome();
     const st = stats(p);
-    return pageHead(esc(p.name), esc(p.description || '你的多语言文案，都在这里。'), `<div class="flex"><button class="btn" data-action="review-project" ${p.entries.length ? '' : 'disabled'}>${icon('edit')}校对</button><button class="btn primary" data-action="add-content">${icon('plus')}新增文案</button></div>`, 'PROJECT / LOCALIZATION') + `<div class="panel project-summary"><div><p>中文文案</p><strong>${p.entries.length}<span style="font-size:10px;margin-left:5px">条</span></strong></div><div><p>目标语言</p><strong>${p.locales.length}<span style="font-size:10px;margin-left:5px">种</span></strong></div><div><p>译文齐全度</p><strong>${st.ratio}%</strong></div><div><p>命名风格</p><strong style="font-size:13px;padding-top:9px;display:block">snake_case</strong></div></div><div class="section-title"><h2>项目文案 <span class="small muted" style="font-weight:400;margin-left:8px">${p.entries.length} 条</span></h2><div class="flex"><button class="text-button" data-action="add-document">${icon('upload')}导入文档</button><button class="text-button" data-action="export-project" ${p.entries.length ? '' : 'disabled'}>${icon('download')}导出语言包</button></div></div><div class="panel table-overflow">${p.entries.length ? `<table class="entries-table"><thead><tr><th>#</th><th>中文原文 / 语义 key</th><th>目标语言</th><th>状态</th><th></th></tr></thead><tbody>${p.entries.map((e, i) => { const completed = p.locales.filter(l => textOf(e.translations[l]).trim()).length; return `<tr><td>${String(i + 1).padStart(2, '0')}</td><td class="source-cell">${esc(e.source)}<br><code>${esc(e.key)}</code></td><td><div class="flex" style="gap:4px">${p.locales.map(l => `<span class="language-mini" style="${!textOf(e.translations[l]).trim() ? 'opacity:.35' : ''}">${lang(l).label}</span>`).join('')}</div></td><td><span class="badge ${completed === p.locales.length ? 'ok' : 'warn'}">${completed === p.locales.length ? '译文齐全' : '待补译'}</span></td><td><button class="btn small-btn" data-action="edit-project-entry" data-index="${i}">校对${icon('chevron')}</button></td></tr>`; }).join('')}</tbody></table>` : emptyState('第一条文案，从这里开始', '输入中文或导入文档，生成你的第一组语言包。', '<button class="btn primary" data-action="add-content">' + icon('plus') + '添加文案</button>')}</div><div class="notice" style="margin-top:20px">${icon('sparkles')}<span>本原型使用本地演示译文。编辑结果会自动保存在当前浏览器，导出的 JSON / ZIP 是真实文件。</span></div>`;
+    return pageHead(esc(p.name), esc(p.description || '你的多语言文案，都在这里。'), `<div class="flex"><button class="btn" data-action="review-project" ${p.entries.length ? '' : 'disabled'}>${icon('edit')}校对</button><button class="btn primary" data-action="add-content">${icon('plus')}新增文案</button></div>`, 'PROJECT / LOCALIZATION') + `<div class="panel project-summary"><div><p>中文文案</p><strong>${p.entries.length}<span style="font-size:10px;margin-left:5px">条</span></strong></div><div><p>目标语言</p><strong>${p.locales.length}<span style="font-size:10px;margin-left:5px">种</span></strong></div><div><p>译文齐全度</p><strong>${st.ratio}%</strong></div><div><p>命名风格</p><strong style="font-size:13px;padding-top:9px;display:block">snake_case</strong></div></div><div class="project-translation-cta"><div><strong>使用 MyMemory 批量翻译</strong><p>只处理缺失或历史演示译文，保留已确认及人工修改。</p></div><button class="btn primary" data-action="translate-project" ${p.entries.length ? '' : 'disabled'}>${icon('globe')}翻译未完成项</button></div><div class="section-title"><h2>项目文案 <span class="small muted" style="font-weight:400;margin-left:8px">${p.entries.length} 条</span></h2><div class="flex"><button class="text-button" data-action="add-document">${icon('upload')}导入文档</button><button class="text-button" data-action="export-project" ${p.entries.length ? '' : 'disabled'}>${icon('download')}导出语言包</button></div></div><div class="panel table-overflow">${p.entries.length ? `<table class="entries-table"><thead><tr><th>#</th><th>中文原文 / 语义 key</th><th>目标语言</th><th>状态</th><th></th></tr></thead><tbody>${p.entries.map((e, i) => { const completed = p.locales.filter(l => textOf(e.translations[l]).trim()).length; return `<tr><td>${String(i + 1).padStart(2, '0')}</td><td class="source-cell">${esc(e.source)}<br><code>${esc(e.key)}</code></td><td><div class="flex" style="gap:4px">${p.locales.map(l => `<span class="language-mini" style="${!textOf(e.translations[l]).trim() ? 'opacity:.35' : ''}">${lang(l).label}</span>`).join('')}</div></td><td><span class="badge ${completed === p.locales.length ? 'ok' : 'warn'}">${completed === p.locales.length ? '译文齐全' : '待补译'}</span></td><td><button class="btn small-btn" data-action="edit-project-entry" data-index="${i}">校对${icon('chevron')}</button></td></tr>`; }).join('')}</tbody></table>` : emptyState('第一条文案，从这里开始', '输入中文或导入文档，生成你的第一组语言包。', '<button class="btn primary" data-action="add-content">' + icon('plus') + '添加文案</button>')}</div><div class="notice" style="margin-top:20px">${icon('sparkles')}<span>翻译通过 MyMemory 真实 API 生成；项目保存在当前浏览器。可翻译未完成项，人工修改和已确认译文会受到保护。</span></div>`;
   }
   function emptyState(title, subtitle, action = '') { return `<div class="empty-state"><div class="tag-icon">${icon('layers')}</div><h3>${title}</h3><p>${subtitle}</p>${action}</div>`; }
   function formatTime(value) { return new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Shanghai' }).format(new Date(value)); }
   function renderTasks() {
-    return pageHead('翻译任务', '每一段跨越语言的旅程，都有迹可循。', '<button class="btn primary" data-action="quick-start">' + icon('plus') + '新建翻译</button>', 'TRANSLATION TASKS') + `<div class="panel">${state.jobs.length ? state.jobs.map(job => `<div class="activity-row"><div class="tag-icon">${icon(job.status === 'completed' ? 'circlecheck' : 'tasks')}</div><div class="grow"><h3>${esc(job.projectName)} <span class="badge ${job.status === 'completed' && !job.missing ? 'ok' : 'warn'}" style="margin-left:5px">${job.status === 'completed' ? job.missing ? '待补译' : '已完成' : job.status === 'running' ? '翻译中' : '已暂停'}</span></h3><p>${job.count} 条文案 · ${job.locales.map(l => lang(l).name).join(' / ')} · ${job.processed} / ${job.total} 已处理 · ${formatTime(job.createdAt)}</p></div><button class="btn small-btn" data-action="open-job" data-id="${job.id}">${job.status === 'completed' ? '校对译文' : '查看任务'}${icon('chevron')}</button></div>`).join('') : emptyState('还没有翻译任务', '从一段中文开始，生成第一组多语言译文。', '<button class="btn primary" data-action="quick-start">开始翻译' + icon('right') + '</button>')}</div>`;
+    return pageHead('翻译任务', '每一种语言的进度、失败原因与重试，都在这里。', '<button class="btn primary" data-action="quick-start">' + icon('plus') + '新建翻译</button>', 'TRANSLATION TASKS') + `<div class="panel">${state.jobs.length ? state.jobs.map(job => {
+      const real = job.provider === 'MyMemory';
+      const summary = real ? J.summary(job) : { success: 0, failed: 0, processed: job.processed || 0, total: job.total || 0 };
+      const label = !real ? '历史演示任务' : job.status === 'quota' ? '额度已用完' : job.status === 'running' ? '翻译中' : job.status === 'paused' ? '已暂停' : summary.failed ? '部分失败' : '已完成';
+      return `<div class="activity-row"><div class="tag-icon">${icon(job.status === 'completed' && !summary.failed ? 'circlecheck' : 'tasks')}</div><div class="grow"><h3>${esc(job.projectName)} <span class="badge ${real && job.status === 'completed' && !summary.failed ? 'ok' : 'warn'}" style="margin-left:5px">${label}</span></h3><p>${job.count || job.entries?.length || 0} 条文案 · ${(job.locales || []).map(l => lang(l).name).join(' / ')} · ${real ? `成功 ${summary.success} / 失败 ${summary.failed}` : '旧版记录'} · ${formatTime(job.createdAt)}</p></div><button class="btn small-btn" data-action="open-job" data-id="${job.id}">${real ? '查看任务' : '校对译文'}${icon('chevron')}</button></div>`;
+    }).join('') : emptyState('还没有翻译任务', '从一段中文开始，生成第一组多语言译文。', '<button class="btn primary" data-action="quick-start">开始翻译' + icon('right') + '</button>')}</div>`;
   }
   function renderExports() {
     return pageHead('导出记录', '每一次交付，都可以重新获取。', '', 'EXPORT HISTORY') + `<div class="panel">${state.exports.length ? state.exports.map(record => `<div class="activity-row"><div class="tag-icon blue">${icon('code')}</div><div class="grow"><h3>${esc(record.name)}</h3><p>${esc(record.projectName)} · ${record.count} 个 key · ${record.fileCount} 个文件 · ${record.draft ? '草稿' : '正式'} · ${formatTime(record.createdAt)}</p></div><button class="btn small-btn" data-action="redownload" data-id="${record.id}">${icon('download')}下载</button></div>`).join('') : emptyState('语言包准备好时，就来这里', '完成翻译校对并导出后，记录会出现在这里。', '<button class="btn" data-action="nav" data-view="home">返回我的项目' + icon('right') + '</button>')}</div>`;
   }
   function renderSettings() {
-    return pageHead('偏好设置', '让工作台，更贴近你的使用习惯。', '', 'WORKSPACE PREFERENCES') + `<div class="settings-grid"><section class="panel"><div class="panel-head"><h2>导出偏好</h2>${icon('code')}</div><div class="panel-body"><div class="settings-line"><div><h3>默认包含中文源语言包</h3><p>导出时一并生成 zh-Hans.json</p></div><input class="toggle" id="setting-source" type="checkbox" aria-label="默认包含中文源语言包" ${state.settings.includeSource ? 'checked' : ''}></div><div class="settings-line"><div><h3>格式化 JSON</h3><p>使用 2 空格缩进，方便阅读与版本比较</p></div><input class="toggle" id="setting-pretty" type="checkbox" aria-label="默认格式化 JSON" ${state.settings.pretty ? 'checked' : ''}></div><div class="settings-line"><div><h3>key 命名风格</h3><p>小写英文与下划线，生成后保持稳定</p></div><span class="mono green">snake_case</span></div></div></section><section class="panel"><div class="panel-head"><h2>关于这个原型</h2>${icon('sparkles')}</div><div class="panel-body"><div class="notice">${icon('shield')}<span>内容与文档只在当前浏览器处理；未接入真实翻译 API。更换浏览器或清除站点数据后，本地记录不会保留。</span></div><div class="settings-line"><div><h3>演示翻译引擎</h3><p>7 种目标语言，常见文案示例词典</p></div><span class="badge ok">本地</span></div><div class="settings-line"><div><h3>恢复初始示例</h3><p>清除本原型中的项目、任务和导出记录</p></div><button class="btn small-btn" data-action="reset-confirm">重置</button></div><button class="text-button" data-action="help">查看原型使用说明 ${icon('right')}</button></div></section></div>`;
+    return pageHead('偏好设置', '让工作台，更贴近你的使用习惯。', '', 'WORKSPACE PREFERENCES') + `<div class="settings-grid"><section class="panel"><div class="panel-head"><h2>导出偏好</h2>${icon('code')}</div><div class="panel-body"><div class="settings-line"><div><h3>默认包含中文源语言包</h3><p>导出时一并生成 zh-Hans.json</p></div><input class="toggle" id="setting-source" type="checkbox" aria-label="默认包含中文源语言包" ${state.settings.includeSource ? 'checked' : ''}></div><div class="settings-line"><div><h3>格式化 JSON</h3><p>使用 2 空格缩进，方便阅读与版本比较</p></div><input class="toggle" id="setting-pretty" type="checkbox" aria-label="默认格式化 JSON" ${state.settings.pretty ? 'checked' : ''}></div><div class="settings-line"><div><h3>key 命名风格</h3><p>小写英文与下划线，生成后保持稳定</p></div><span class="mono green">snake_case</span></div></div></section><section class="panel"><div class="panel-head"><h2>MyMemory 翻译服务</h2><span class="badge ok">真实 API</span></div><div class="panel-body"><div class="notice">${icon('shield')}<span>点击翻译后，选中的原文会发送给 MyMemory。文档文件不上传；项目、人工修改与导出记录保存在当前浏览器。</span></div><div class="settings-line"><div><h3>匿名免费额度</h3><p>每天 5,000 字符，多目标语言累计使用</p></div><span class="badge neutral">无需密钥</span></div><div style="padding-top:18px"><label class="field-label" for="translation-email">MyMemory 联系邮箱（选填）</label><input class="field" type="email" id="translation-email" value="${esc(state.settings.translationEmail || '')}" placeholder="填写你自己的有效联系邮箱" maxlength="254" autocomplete="email"><p class="caption">保存后将随翻译请求发送给 MyMemory。官方提供有效邮箱用户每天 50,000 字符额度；下次启动或恢复任务时生效。</p><div id="settings-error" class="error-text" role="alert"></div><button class="btn small-btn soft" data-action="save-translation-settings" style="margin-top:12px">保存翻译设置</button></div><div class="settings-line"><div><h3>恢复初始示例</h3><p>清除本原型中的项目、任务和导出记录</p></div><button class="btn small-btn" data-action="reset-confirm">重置</button></div><button class="text-button" data-action="help">查看使用说明 ${icon('right')}</button></div></section></div>`;
   }
   function render() {
     const views = { home: renderHome, project: renderProject, input: renderInput, import: renderImport, languages: renderLanguages, translate: renderTranslate, review: renderReview, export: renderExport, tasks: renderTasks, exports: renderExports, settings: renderSettings };
@@ -313,7 +382,7 @@
     setTimeout(() => $('#project-name').focus(), 30);
   }
   function helpModal() {
-    modal('从中文，到你的语言包', '<p>这是译包 LangPack 的完整交互原型。你可以试用两条入口：</p><ol class="help-list"><li>文本输入：点击“使用示例”，多选语言，体验翻译、校对与导出。</li><li>文档导入：载入示例，或上传 TXT、Markdown、DOCX，调整段落与 key 后继续。</li><li>校对译文：切换语言，修改译文、保留占位符，点击保存。</li><li>导出：下载真实 JSON 或 ZIP；有缺失译文时可选择草稿导出。</li></ol><div class="notice warning">' + icon('sparkles') + '<span>当前使用本地示例词典，不调用真实翻译 API。未知中文需手动命名 key、补充译文。文档上限 10 MB / 1000 段，单次翻译上限 1000 条。</span></div>', '<button class="btn primary" data-action="close-modal">开始体验' + icon('right') + '</button>');
+    modal('从中文，到你的语言包', '<p>译包已接入 MyMemory 真实翻译服务。</p><ol class="help-list"><li>输入中文，或上传 TXT、Markdown、DOCX，预览并调整文案与 key。</li><li>选择目标语言，点击开始翻译。所选原文将分段发送给 MyMemory，文档文件不上传。</li><li>长段落按 480 UTF-8 字节拆分，请求按顺序执行，完成后仍合并为一个 key。网络暂时失败自动有限重试。</li><li>额度耗尽会暂停任务；可稍后重试失败与未完成项。关闭页面后需重新打开并继续。</li><li>校对并导出 JSON / ZIP。缺失、失败或未确认的历史演示译文会阻止正式导出，可选择草稿导出。</li></ol><div class="notice warning">' + icon('globe') + '<span>匿名额度每天 5,000 字符。设置里可填写自己的有效联系邮箱并随请求发送，以使用服务商提供的更高额度。机器译文仍需校对；语义 key 继续使用本地规则与手动命名。</span></div>', '<button class="btn primary" data-action="close-modal">开始使用' + icon('right') + '</button>');
   }
   async function importFile(file) {
     if (!file) return;
@@ -344,6 +413,7 @@
   }
   function openProjectReview(index = 0, view = 'review') {
     if (state.session?.status === 'running') { toast('请先完成或暂停当前翻译任务。'); return nav('translate'); }
+    cancelSingle();
     const p = currentProject();
     if (!p.entries.length) return newSession('text');
     state.session = { id: uid(), projectId: p.id, mode: 'project', entries: p.entries, locales: [...p.locales], status: 'completed', processed: p.entries.length * p.locales.length, committed: true, includeSource: state.settings.includeSource, pretty: state.settings.pretty, exportLocales: [...p.locales] };
@@ -432,7 +502,9 @@
       case 'remove-locale': s.locales = s.locales.filter(l => l !== button.dataset.locale); persist(); render(); break;
       case 'start-translation': startTranslation(); break;
       case 'resume-translation': startTranslation(true); break;
-      case 'pause-translation': clearTimeout(translationTimer); s.status = 'paused'; { const j = state.jobs.find(j => j.id === s.jobId); if (j) j.status = 'paused'; } persist(); render(); toast('任务已暂停，已处理结果已保存。'); break;
+      case 'pause-translation': pauseTranslation(); break;
+      case 'retry-failed': startTranslation(true, true); break;
+      case 'inspect-failed': state.reviewIndex = selectedEntries().findIndex(entry => entry.id === button.dataset.entryId); state.reviewLocale = button.dataset.locale; nav('review'); break;
       case 'to-review': state.reviewIndex = 0; state.reviewLocale = s.locales[0]; nav('review'); break;
       case 'review-locale': state.reviewLocale = button.dataset.locale; persist(); render(); break;
       case 'review-entry': state.reviewIndex = +button.dataset.index; persist(); render(); break;
@@ -440,8 +512,9 @@
       case 'review-next': state.reviewIndex++; persist(); render(); break;
       case 'save-review': saveReview(true); break;
       case 'retranslate': {
+        if (!saveReview()) break;
         const entry = currentReviewEntry();
-        if (entry.edited?.[state.reviewLocale]) { modal('替换你编辑过的译文？', '<p>重新翻译会用演示词典中的结果替换当前译文，其他语言保持不变。</p>', '<button class="btn" data-action="close-modal">取消</button><button class="btn primary" data-action="confirm-retranslate">替换译文</button>'); }
+        if (entry.edited?.[state.reviewLocale]) { modal('替换你编辑过的译文？', '<p>将把这条原文重新发送给 MyMemory。成功后替换当前译文，失败时保留现有内容。</p>', '<button class="btn" data-action="close-modal">取消</button><button class="btn primary" data-action="confirm-retranslate">替换译文</button>'); }
         else retranslateEntry(); break;
       }
       case 'confirm-retranslate': $('#modal').close(); retranslateEntry(); break;
@@ -458,28 +531,35 @@
       case 'download-zip': download('zip'); break;
       case 'download-json': download('json'); break;
       case 'review-project': openProjectReview(); break;
+      case 'translate-project': openProjectReview(0, 'languages'); break;
       case 'edit-project-entry': openProjectReview(+button.dataset.index); break;
       case 'export-project': openProjectReview(0, 'export'); break;
       case 'open-job': {
         const job = state.jobs.find(j => j.id === button.dataset.id);
         if (!job) break;
-        if (job.id === s?.jobId) { state.currentProjectId = job.projectId; nav(job.status === 'completed' ? 'review' : 'translate'); break; }
+        cancelSingle();
+        if (job.id === s?.jobId) { state.currentProjectId = job.projectId; nav(job.provider === 'MyMemory' ? 'translate' : 'review'); break; }
         if (s?.status === 'running') { toast('请先完成或暂停当前任务。'); return nav('translate'); }
         state.currentProjectId = job.projectId;
         const p = currentProject();
         const entries = job.entries.map(e => p.entries.find(pe => pe.id === e.id) || e);
         state.session = { id: uid(), projectId: p.id, mode: 'text', entries, locales: [...job.locales], status: job.status, processed: job.processed, jobId: job.id, committed: job.status === 'completed', includeSource: state.settings.includeSource, pretty: state.settings.pretty, exportLocales: [...job.locales] };
-        state.reviewIndex = 0; state.reviewLocale = job.locales[0]; nav(job.status === 'completed' ? 'review' : 'translate'); break;
+        state.reviewIndex = 0; state.reviewLocale = job.locales[0]; nav(job.provider === 'MyMemory' ? 'translate' : 'review'); break;
       }
       case 'redownload': {
         const record = state.exports.find(r => r.id === button.dataset.id); if (!record) break;
         triggerDownload(record.kind === 'zip' ? E.makeZip(record.files) : Object.values(record.files)[0], record.name, record.kind === 'zip' ? 'application/zip' : 'application/json;charset=utf-8'); toast('已重新发起下载。'); break;
       }
+      case 'save-translation-settings': {
+        const field = $('#translation-email'), email = field.value.trim();
+        if (email && (!field.validity.valid || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) { $('#settings-error').textContent = '请输入可接收联系的有效邮箱，或清空后使用匿名额度。'; break; }
+        state.settings.translationEmail = email; persist(); toast(email ? '已保存，后续翻译将使用该联系邮箱。' : '已切换为匿名翻译。'); break;
+      }
       case 'reset-confirm': modal('恢复初始示例？', '<p>本原型内的自定义项目、译文、任务和导出记录将被清除。建议先导出需要保留的语言包。</p>', '<button class="btn" data-action="close-modal">取消</button><button class="btn primary" data-action="reset">确认重置</button>'); break;
-      case 'reset': clearTimeout(translationTimer); state = initialState(); persist(); $('#modal').close(); render(); toast('已恢复初始示例。'); break;
+      case 'reset': batchGeneration++; batchController?.abort(); batchController = null; cancelSingle(); translationClients.clear(); state = initialState(); persist(); $('#modal').close(); render(); toast('已恢复初始示例。'); break;
       case 'flow-back': {
         if (state.view === 'input' || state.view === 'import') nav('project');
-        else if (state.view === 'languages') nav(s.mode === 'document' ? 'import' : 'input');
+        else if (state.view === 'languages') nav(s.mode === 'project' ? 'project' : s.mode === 'document' ? 'import' : 'input');
         else if (state.view === 'translate') nav('tasks');
         else if (state.view === 'review') nav('project');
         else if (state.view === 'export') nav('review');
@@ -487,11 +567,36 @@
       }
     }
   });
-  function retranslateEntry() {
-    const e = currentReviewEntry();
-    const result = E.translate(e.source, state.reviewLocale);
-    if (!result.known) { toast('演示词典中没有这条文案，请手动补充译文。'); return; }
-    e.translations[state.reviewLocale] = result.text; e.reviewed[state.reviewLocale] = false; if (e.edited) e.edited[state.reviewLocale] = false; commitSession(); persist(); render(); toast('已重新载入演示译文，请校对。');
+  async function retranslateEntry() {
+    const session = state.session, entry = currentReviewEntry(), locale = state.reviewLocale;
+    if (!entry || session.status === 'running') return;
+    cancelSingle();
+    const controller = new AbortController(); singleController = controller;
+    const revision = entry.translationRevision?.[locale] || 0;
+    const source = entry.source, sourceVersion = entry.sourceVersion, reviewed = !!entry.reviewed[locale];
+    singleRequest = { entryId: entry.id, locale };
+    render();
+    let notice = '';
+    try {
+      const result = await translationClient().translate(source, locale, { signal: controller.signal, bypassCache: true });
+      if (controller.signal.aborted || state.session?.id !== session.id) return;
+      if (entry.source !== source || entry.sourceVersion !== sourceVersion || (entry.translationRevision?.[locale] || 0) !== revision || !!entry.reviewed[locale] !== reviewed) { notice = '译文已被你修改，返回结果未覆盖现有内容。'; return; }
+      entry.translations[locale] = result.text;
+      entry.reviewed[locale] = false;
+      entry.edited ||= {}; entry.edited[locale] = false;
+      entry.translationMeta ||= {}; entry.translationMeta[locale] = { provider: 'MyMemory', status: 'success', sourceText: source, translatedAt: new Date().toISOString() };
+      entry.translationRevision ||= {}; entry.translationRevision[locale] = revision + 1;
+      commitSession(session); persist(); notice = 'MyMemory 译文已保存，请校对。';
+    } catch (error) {
+      if (controller.signal.aborted || state.session?.id !== session.id) return;
+      notice = error.message || '翻译失败，原有译文已保留。';
+    } finally {
+      if (singleController === controller) {
+        singleController = null; singleRequest = null;
+        if (state.session?.id === session.id && state.view === 'review' && currentReviewEntry()?.id === entry.id && state.reviewLocale === locale) render();
+        if (notice) toast(notice);
+      }
+    }
   }
   document.addEventListener('input', event => {
     const target = event.target, s = state.session;
@@ -503,7 +608,7 @@
     if (target.dataset.keyIndex !== undefined) { s.entries[+target.dataset.keyIndex].key = target.value; saveSoon(); }
     if (target.dataset.docSource !== undefined) { const entry = s.entries[+target.dataset.docSource]; entry.source = target.value; entry.translations = {}; entry.reviewed = {}; saveSoon(); }
     if (target.id === 'review-text') {
-      const e = currentReviewEntry(); e.translations[state.reviewLocale] = target.value; e.reviewed[state.reviewLocale] = false; e.edited = e.edited || {}; e.edited[state.reviewLocale] = true;
+      const e = currentReviewEntry(); e.translations[state.reviewLocale] = target.value; e.reviewed[state.reviewLocale] = false; markManual(e, state.reviewLocale);
       $('#review-confirm').checked = false; $('#review-confirm').disabled = !target.value.trim();
       const issues = E.validate([e], [state.reviewLocale]); $('#entry-errors').textContent = issues.map(i => i.message).join(' '); commitSession(); saveSoon();
     }

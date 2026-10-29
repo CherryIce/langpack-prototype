@@ -1,6 +1,6 @@
 # 译包 LangPack · Flutter
 
-**[公开在线体验：译包 LangPack · 多语言工作台](https://langpack-studio-oct29.neonkrill256.chatgpt.site)**
+**[公开在线体验：译包 LangPack · 多语言工作台](https://langpack-standalone.406859116.workers.dev/)**（Cloudflare Workers 独立部署）
 
 一套 Dart 代码实现 iOS、Android、桌面（Windows / macOS / Linux）与 Web 的多语言翻译工作台。默认应用标识为 `com.cherryice.langpack`。
 
@@ -21,9 +21,9 @@ iOS / macOS 需要 macOS、Xcode 和 CocoaPods；Android 需要 Android SDK、JD
 
 ## Web 与备用翻译服务
 
-原生 App（iOS / Android / Windows / macOS / Linux）默认连接公开在线项目的 `/api/translation/status` 和 `/api/translation/backup`，由在线服务器调用 ZTAITrans。普通使用者无需填写密钥或自行部署代理；密钥始终保存在服务器。首次运行及旧版保存的空地址会自动使用默认在线服务，显式自定义地址仍保留。
+原生 App（iOS / Android / Windows / macOS / Linux）当前内置默认连接原 Sites 公开项目的 `/api/translation/status` 和 `/api/translation/backup`，由在线服务器调用 ZTAITrans。普通使用者无需填写密钥或自行部署代理；密钥始终保存在服务器。首次运行及旧版保存的空地址会自动使用默认在线服务，显式自定义地址仍保留。
 
-网站设为公开不会修改已安装的旧二进制，请安装包含默认在线服务改动的新版本。旧版 App 也可先在“备用翻译服务器”中填写 `https://langpack-studio-oct29.neonkrill256.chatgpt.site`，填的是服务地址，无需填写 API 密钥。
+如需改用新的独立部署服务，请在“备用翻译服务器”中填写 `https://langpack-standalone.406859116.workers.dev`，填的是服务地址，无需填写 API 密钥。更新 README 不会修改应用代码或已安装 App 的内置默认地址。
 
 Flutter Web 使用自身部署站点的同源代理，避免跨域访问限制；它不会默认从其他域名跨域调用上述公开站点。在线站点的普通用户无需配置密钥；自行本地或独立部署 Flutter Web 时，由部署者配置自己的服务端密钥。
 
@@ -58,10 +58,10 @@ flutter run -d macos
 需要使用自己的服务器时，可在应用设置中填写自定义地址，或通过 `API_BASE_URL` 设置定制构建的首次运行默认地址。应用内显式保存的地址优先；清空自定义地址或点击“恢复内置在线服务”后，一律使用公开在线代理。地址使用 HTTPS **根域名**，不含接口路径或密钥：
 
 ```sh
-flutter run -d macos --dart-define=API_BASE_URL=https://translate.example.com
+flutter run -d macos --dart-define=API_BASE_URL=https://langpack-standalone.406859116.workers.dev
 ```
 
-请替换示例域名。通过 `flutter devices` 获取 iOS / Android 设备标识，再替换 `-d` 参数。Windows、Linux 分别在对应系统运行 `flutter run -d windows`、`flutter run -d linux`。
+上述命令使用新的独立部署地址，也可替换为自己的服务器。通过 `flutter devices` 获取 iOS / Android 设备标识，再替换 `-d` 参数。Windows、Linux 分别在对应系统运行 `flutter run -d windows`、`flutter run -d linux`。
 
 本机调试先启动 Node 服务，macOS / iOS 模拟器使用本机回环地址：
 
@@ -117,7 +117,7 @@ flutter test test/live_smoke_test.dart --dart-define=RUN_PUBLIC_PROXY_TEST=true
 全文档真实验收也可通过公开在线代理运行，无需客户端密钥；自建代理由部署者配置服务端密钥。下面以公开服务为例，显式开启：
 
 ```sh
-flutter test test/live_smoke_test.dart --dart-define=RUN_LIVE_TRANSLATION=true --dart-define=API_BASE_URL=https://langpack-studio-oct29.neonkrill256.chatgpt.site
+flutter test test/live_smoke_test.dart --dart-define=RUN_LIVE_TRANSLATION=true --dart-define=API_BASE_URL=https://langpack-standalone.406859116.workers.dev
 ```
 
 `RUN_LIVE_TRANSLATION` 和 `RUN_PUBLIC_PROXY_TEST` 默认关闭，真实测试会发送样例中文并消耗额度。测试区分实际主服务请求与“模拟主服务额度耗尽 → 真实备用翻译”的文档流程；产物写入仓库 `outputs/flutter-live/`，可通过 `LIVE_OUTPUT_DIR` 改为其他项目内证据目录。真实后端、Mock 合约测试、界面运行和构建证据分别记录。

@@ -1,5 +1,7 @@
 # 译包 LangPack · Flutter
 
+**[公开在线体验：译包 LangPack · 多语言工作台](https://langpack-studio-oct29.neonkrill256.chatgpt.site)**
+
 一套 Dart 代码实现 iOS、Android、桌面（Windows / macOS / Linux）与 Web 的多语言翻译工作台。默认应用标识为 `com.cherryice.langpack`。
 
 完整流程：项目首页 → 文本输入或文档导入 → 段落预览与 key → 语言多选 → 真实翻译 → 校对 → JSON / ZIP 导出。
@@ -19,6 +21,12 @@ iOS / macOS 需要 macOS、Xcode 和 CocoaPods；Android 需要 Android SDK、JD
 
 ## Web 与备用翻译服务
 
+原生 App（iOS / Android / Windows / macOS / Linux）默认连接公开在线项目的 `/api/translation/status` 和 `/api/translation/backup`，由在线服务器调用 ZTAITrans。普通使用者无需填写密钥或自行部署代理；密钥始终保存在服务器。首次运行及旧版保存的空地址会自动使用默认在线服务，显式自定义地址仍保留。
+
+网站设为公开不会修改已安装的旧二进制，请安装包含默认在线服务改动的新版本。旧版 App 也可先在“备用翻译服务器”中填写 `https://langpack-studio-oct29.neonkrill256.chatgpt.site`，填的是服务地址，无需填写 API 密钥。
+
+Flutter Web 使用自身部署站点的同源代理，避免跨域访问限制；它不会默认从其他域名跨域调用上述公开站点。在线站点的普通用户无需配置密钥；自行本地或独立部署 Flutter Web 时，由部署者配置自己的服务端密钥。
+
 在 `flutter_app/` 构建：
 
 ```sh
@@ -33,15 +41,21 @@ node scripts/flutter-server.mjs
 
 打开 [http://127.0.0.1:4180](http://127.0.0.1:4180)。默认监听 `127.0.0.1:4180`，可通过服务端环境变量 `HOST`、`PORT` 调整。服务同时提供 Flutter Web 静态文件与 `/api/translation/status`、`/api/translation/backup`，网页与代理同源，无需开放跨域访问。
 
-MyMemory 主翻译无需密钥。启用 ZTAITrans 备用翻译时，由运行环境向 **Node 服务进程**注入 `TRANSLATION_API_KEY`，再启动服务。密钥不进入 Flutter 设置、`--dart-define`、源码、Web 文件或客户端安装包。未配置备用密钥时，MyMemory 仍可独立使用；额度耗尽后会提示备用未配置，并保留成功结果。
+MyMemory 主翻译无需密钥。对于自行部署的 Node 服务，启用 ZTAITrans 备用翻译时，由部署环境向 **Node 服务进程**注入 `TRANSLATION_API_KEY`，再启动服务。密钥不进入 Flutter 设置、`--dart-define`、源码、Web 文件或客户端安装包。自建服务未配置备用密钥时，MyMemory 仍可独立使用；额度耗尽后会提示该服务器备用未配置，并保留成功结果。
 
-正式部署时，将 Web 文件和现有 `worker/handler.js` 代理部署到同一 HTTPS 域名。Node 服务放在 HTTPS 反向代理后时，为服务端配置 `PUBLIC_ORIGIN=https://你的服务域名`，让代理校验使用外部固定域名；默认仍使用本地 HTTP 地址，不信任任意转发请求头。HTTPS、进程管理和入口访问控制需按部署环境配置，脚本本身不提供账户系统。当前代码未自动部署此服务。旧版 Sites 网站有私有访问保护，不能假设其地址可供原生客户端匿名访问。
+正式部署时，将 Web 文件和现有 `worker/handler.js` 代理部署到同一 HTTPS 域名。Node 服务放在 HTTPS 反向代理后时，为服务端配置 `PUBLIC_ORIGIN=https://你的服务域名`，让代理校验使用外部固定域名；默认仍使用本地 HTTP 地址，不信任任意转发请求头。HTTPS、进程管理和入口访问控制需按部署环境配置，脚本本身不提供账户系统。当前代码未自动部署你的自建服务。上述公开 Sites 站点已可供原生客户端使用其在线代理。
 
 仅调试界面可以运行 `flutter run -d chrome`；该开发服务器未挂载备用代理，完整流程使用上述同源服务。
 
 ## 移动端与桌面端启动
 
-原生客户端在应用设置中填写“备用翻译服务地址”，或通过 `API_BASE_URL` 设置首次运行的默认地址。填写自有 HTTPS **根域名**，不含接口路径或密钥：
+标准版本的原生客户端直接运行即可使用默认在线代理，例如：
+
+```sh
+flutter run -d macos
+```
+
+需要使用自己的服务器时，可在应用设置中填写自定义地址，或通过 `API_BASE_URL` 设置定制构建的首次运行默认地址。应用内显式保存的地址优先；清空自定义地址或点击“恢复内置在线服务”后，一律使用公开在线代理。地址使用 HTTPS **根域名**，不含接口路径或密钥：
 
 ```sh
 flutter run -d macos --dart-define=API_BASE_URL=https://translate.example.com
@@ -77,7 +91,7 @@ flutter run -d emulator-5554 --dart-define=API_BASE_URL=http://10.0.2.2:4180
 
 文档最多 **10 MB / 1000 个内容块**，DOCX 正文解压最多 **20 MB**。不支持 PDF、扫描件、旧版 DOC、加密文档或复杂版式还原；导出仅包含文本资源。文档文件在本地解析；开始翻译后，所选原文会发送给对应服务。
 
-MyMemory 有免费额度和限流。ZTAITrans 使用现有授权预算，未承诺免费或永久免费。备用授权、配置或预算不可用时会停止任务并保留成功结果。
+MyMemory 有免费额度和限流。公共备用服务共享在线站点现有授权预算，ZTAITrans 未承诺免费或永久免费。备用授权、配置或预算不可用时会停止任务并保留成功结果。
 
 项目、校对、任务摘要、导出快照与设置保存在当前设备或浏览器，无账户、云同步或跨设备共享。Flutter 各端数据与旧版 `web/` 原型分别保存；旧版数据不自动迁移，新版需重新导入原文。删除应用 / 浏览器站点数据会移除记录，请及时导出需要保留的语言包。
 
@@ -92,13 +106,21 @@ flutter analyze
 flutter test
 ```
 
-真实验收需先启动代理并配置服务端密钥，再显式开启：
+无需填写地址或密钥的原生默认服务验收：
 
 ```sh
-flutter test test/live_smoke_test.dart --dart-define=RUN_LIVE_TRANSLATION=true --dart-define=API_BASE_URL=http://127.0.0.1:4180
+flutter test test/live_smoke_test.dart --dart-define=RUN_PUBLIC_PROXY_TEST=true
 ```
 
-`RUN_LIVE_TRANSLATION` 默认关闭，真实测试会发送样例中文并消耗额度。测试区分实际主服务请求与“模拟主服务额度耗尽 → 真实备用翻译”的文档流程；产物写入仓库 `outputs/flutter-live/`，可通过 `LIVE_OUTPUT_DIR` 改为其他项目内证据目录。真实后端、Mock 合约测试、界面运行和构建证据分别记录。
+该项模拟 MyMemory 额度耗尽，实际调用默认公开 ZTAITrans 代理，验证空地址也能完成真实翻译。
+
+全文档真实验收也可通过公开在线代理运行，无需客户端密钥；自建代理由部署者配置服务端密钥。下面以公开服务为例，显式开启：
+
+```sh
+flutter test test/live_smoke_test.dart --dart-define=RUN_LIVE_TRANSLATION=true --dart-define=API_BASE_URL=https://langpack-studio-oct29.neonkrill256.chatgpt.site
+```
+
+`RUN_LIVE_TRANSLATION` 和 `RUN_PUBLIC_PROXY_TEST` 默认关闭，真实测试会发送样例中文并消耗额度。测试区分实际主服务请求与“模拟主服务额度耗尽 → 真实备用翻译”的文档流程；产物写入仓库 `outputs/flutter-live/`，可通过 `LIVE_OUTPUT_DIR` 改为其他项目内证据目录。真实后端、Mock 合约测试、界面运行和构建证据分别记录。
 
 在对应宿主机与工具链上执行：
 
@@ -113,7 +135,7 @@ flutter test test/live_smoke_test.dart --dart-define=RUN_LIVE_TRANSLATION=true -
 
 Android 已移除模板的 Release 使用 Debug 签名配置，商店分发前需配置自有 keystore。iOS / macOS 发布需要自有证书、团队与签名；当前工程未完成商店发布。密钥和签名材料不纳入 Git。
 
-`.github/workflows/flutter.yml` 提供固定 Flutter 3.35.7 的静态检查、测试及各平台构建。CI 不调用真实翻译、不配置生产密钥、不发布应用；配置存在不代表已在 GitHub 执行成功。本机实际验证结果以本轮交付说明和 `outputs/` 证据为准。
+`.github/workflows/flutter.yml` 提供固定 Flutter 3.35.7 的静态检查、测试及各平台构建。CI 不调用真实翻译、不配置生产密钥、不发布应用。[此前六平台构建记录](https://github.com/CherryIce/langpack-prototype/actions/runs/40858371621) 已成功；后续改动需查看对应提交的新检查结果。本机实际验证结果以本轮交付说明和 `outputs/` 证据为准。
 
 ## 代码结构
 

@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 
 import '../controller.dart';
 import '../models.dart';
+import '../services/translation_service.dart' show defaultBackupServiceOrigin;
 
 const _green = Color(0xFF197E64);
 const _ink = Color(0xFF243E34);
@@ -138,6 +139,7 @@ class _WorkspaceState extends State<_Workspace> {
   String? _lastError;
   String _lastMessage = '';
   bool? _backupConfigured;
+  int _backupCheckGeneration = 0;
 
   @override
   void initState() {
@@ -3467,7 +3469,7 @@ class _WorkspaceState extends State<_Workspace> {
               ),
               const SizedBox(height: 7),
               const Text(
-                'MyMemory 日额度用尽后切换；备用服务使用服务器的现有授权额度。',
+                'MyMemory 日额度用尽后自动切换。由在线服务器提供授权，使用者无需填写密钥；可用额度由服务端共享。',
                 style: TextStyle(fontSize: 12, color: _muted, height: 1.8),
               ),
               const SizedBox(height: 16),
@@ -3478,18 +3480,17 @@ class _WorkspaceState extends State<_Workspace> {
                       _backupConfigured == true
                           ? '服务端已配置，翻译时验证授权'
                           : _backupConfigured == false
-                          ? '备用服务尚未配置或不可达'
-                          : '尚未检测服务端配置',
+                          ? '当前服务器尚未启用备用翻译'
+                          : !kIsWeb && c.settings.apiBaseUrl.trim().isEmpty
+                          ? '已选用内置在线服务，无需配置密钥'
+                          : '尚未检测服务连接',
                       style: const TextStyle(fontSize: 11, color: _muted),
                     ),
                   ),
                   const SizedBox(width: 8),
                   OutlinedButton(
-                    onPressed: () => _guard(() async {
-                      final result = await c.checkBackup();
-                      if (mounted) setState(() => _backupConfigured = result);
-                    }),
-                    child: const Text('检测配置'),
+                    onPressed: _checkBackupConnection,
+                    child: const Text('检测服务'),
                   ),
                 ],
               ),
@@ -3509,17 +3510,18 @@ class _WorkspaceState extends State<_Workspace> {
                   const SizedBox(height: 20),
                   TextFormField(
                     key: ValueKey('base-${c.settings.apiBaseUrl}'),
-                    initialValue: c.settings.apiBaseUrl,
+                    initialValue:
+                        !kIsWeb && c.settings.apiBaseUrl.trim().isEmpty
+                        ? defaultBackupServiceOrigin
+                        : c.settings.apiBaseUrl,
                     readOnly: true,
                     keyboardType: TextInputType.url,
                     decoration: InputDecoration(
-                      labelText: '备用翻译服务器',
-                      hintText: kIsWeb
-                          ? '使用当前网站的同源服务'
-                          : 'https://your-server.example',
+                      labelText: '备用翻译服务',
+                      hintText: kIsWeb ? '使用当前网站的同源服务' : '内置在线服务（无需配置）',
                       helperText: kIsWeb
                           ? 'Web 使用与应用同源的代理，密钥由服务器保管。'
-                          : '填写可访问的 HTTPS 服务地址，不要填写 API 密钥。',
+                          : '默认使用与在线工作台相同的服务。密钥由服务器保管，可按需切换自定义服务器。',
                       helperMaxLines: 3,
                     ),
                     onFieldSubmitted: (value) => _saveSettings(baseUrl: value),
@@ -3529,20 +3531,25 @@ class _WorkspaceState extends State<_Workspace> {
                     TextButton.icon(
                       onPressed: () async {
                         final base = await _textDialog(
-                          '设置备用翻译服务器',
+                          '自定义备用服务器（选填）',
                           c.settings.apiBaseUrl,
                           lines: 1,
                           allowEmpty: true,
-                          helper:
-                              '使用你可访问的 HTTPS 服务器。服务器应提供 /api/translation/backup 和 /api/translation/status。',
+                          helper: '留空使用内置在线服务，无需密钥。自定义地址需为提供翻译代理的 HTTPS 根域名。',
                         );
                         if (base != null) {
                           await _saveSettings(baseUrl: base.trim());
                         }
                       },
                       icon: const Icon(Icons.link, size: 16),
-                      label: const Text('修改服务器地址'),
+                      label: const Text('自定义服务器（可选）'),
                     ),
+                    if (c.settings.apiBaseUrl.trim().isNotEmpty)
+                      TextButton.icon(
+                        onPressed: () => _saveSettings(baseUrl: ''),
+                        icon: const Icon(Icons.restore, size: 16),
+                        label: const Text('恢复内置在线服务'),
+                      ),
                   ],
                   const SizedBox(height: 18),
                   SwitchListTile.adaptive(
@@ -3590,11 +3597,27 @@ class _WorkspaceState extends State<_Workspace> {
     ],
   );
 
+  Future<void> _checkBackupConnection() async {
+    final generation = ++_backupCheckGeneration;
+    final base = c.settings.apiBaseUrl;
+    bool isCurrent() =>
+        mounted &&
+        generation == _backupCheckGeneration &&
+        base == c.settings.apiBaseUrl;
+    try {
+      final result = await c.checkBackup();
+      if (isCurrent()) setState(() => _backupConfigured = result);
+    } catch (error) {
+      if (isCurrent()) _notify(error.toString(), error: true);
+    }
+  }
+
   Future<void> _saveSettings({
     String? email,
     String? baseUrl,
     bool? includeSource,
   }) => _guard(() async {
+    _backupCheckGeneration++;
     await c.saveSettings(
       email: email ?? c.settings.email,
       apiBaseUrl: baseUrl ?? c.settings.apiBaseUrl,

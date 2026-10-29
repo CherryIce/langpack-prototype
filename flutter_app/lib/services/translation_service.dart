@@ -6,6 +6,10 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+/// Public LangPack proxy; the ZTAITrans credential stays in its hosted runtime.
+const defaultBackupServiceOrigin =
+    'https://langpack-studio-oct29.neonkrill256.chatgpt.site';
+
 /// Cancels queued work, active HTTP requests, retry waits and late responses.
 class CancelToken {
   final Completer<void> _cancelled = Completer<void>();
@@ -249,16 +253,8 @@ class TranslationService {
 
   Uri _endpoint(String base, String path) {
     final cleaned = base.trim();
-    if (cleaned.isEmpty && !kIsWeb) {
-      throw const TranslationFailure(
-        'BACKUP_NOT_CONFIGURED',
-        '请在设置中填写备用翻译服务地址，密钥由服务端保管。',
-        fatal: true,
-        provider: 'ZTAITrans',
-      );
-    }
     final uri = cleaned.isEmpty
-        ? Uri.tryParse(Uri.base.origin)
+        ? Uri.parse(kIsWeb ? Uri.base.origin : defaultBackupServiceOrigin)
         : Uri.tryParse(cleaned);
     if (uri == null ||
         !['http', 'https'].contains(uri.scheme) ||

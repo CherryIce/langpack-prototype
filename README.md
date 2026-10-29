@@ -1,10 +1,12 @@
 # 译包 LangPack · 主备真实翻译
 
+**[在线体验：译包 LangPack · 多语言工作台](https://langpack-studio-oct29.neonkrill256.chatgpt.site)**（已公开）
+
 完整体验：项目首页 → 文本输入 / 文档导入 → 多选语言 → MyMemory 翻译 → 校对 → JSON / ZIP 下载。
 
 ## 打开
 
-前端源码位于 `web/`，服务端代理位于 `worker/`。在线版本由 Sites 的私有访问保护。
+前端源码位于 `web/`，服务端代理位于 `worker/`。[在线版本](https://langpack-studio-oct29.neonkrill256.chatgpt.site) 已公开，普通使用者无需配置翻译密钥。
 
 本地运行 `node scripts/dev-server.mjs`，通过标准输入的一行 JSON 提供服务端密钥（`{"key":"你的服务端密钥"}`），或由受控环境提供 `TRANSLATION_API_KEY`。访问打印的 `http://127.0.0.1:4173`。不要把密钥放进命令行参数、前端代码或交付包。
 
@@ -57,6 +59,8 @@ ZTAITrans 使用现有授权额度；附件文档没有承诺免费或永久免�
 
 Flutter 工程位于 [`flutter_app/`](flutter_app/README.md)，覆盖 iOS、Android、桌面（Windows / macOS / Linux）与 Web，共用文本输入、文档导入、语言多选、真实翻译、校对与 JSON / ZIP 导出流程。原版 `web/` 和现有服务端代理保留。
 
-使用 Flutter 3.35.7 / Dart 3.9.2，在 `flutter_app/` 执行 `flutter pub get`、`flutter analyze`、`flutter test`。完整 Web 流程先执行 `flutter build web --release`，再到仓库根目录运行 `node scripts/flutter-server.mjs`，打开 `http://127.0.0.1:4180`。备用密钥仅由服务端环境变量 `TRANSLATION_API_KEY` 注入，Web 与代理同源；原生端通过设置或 `--dart-define=API_BASE_URL=https://你的服务域名` 指定自有代理。
+使用 Flutter 3.35.7 / Dart 3.9.2，在 `flutter_app/` 执行 `flutter pub get`、`flutter analyze`、`flutter test`。完整 Web 流程先执行 `flutter build web --release`，再到仓库根目录运行 `node scripts/flutter-server.mjs`，打开 `http://127.0.0.1:4180`。原生 App（iOS / Android / Windows / macOS / Linux）默认复用公开在线项目的备用代理，无需填写密钥或自行搭建服务器；已有空配置会自动使用此默认服务。显式自定义的服务器地址仍保留，可在设置中清空以恢复应用默认连接。Flutter Web 使用其部署站点的同源代理；自行部署时，备用密钥仅由运营方通过服务端环境变量 `TRANSLATION_API_KEY` 注入。
 
-Flutter 各端本地数据与原版浏览器数据分别保存，没有账户或云同步；旧版原文需重新导入。平台启动、调试地址、签名、真实 API 验收和 CI 边界详见 [Flutter 使用说明](flutter_app/README.md)。`.github/workflows/flutter.yml` 是待执行的多平台检查配置，不能据此宣称所有平台已构建或发布。
+Flutter 各端本地数据与原版浏览器数据分别保存，没有账户或云同步；旧版原文需重新导入。平台启动、调试地址、签名、真实 API 验收和 CI 边界详见 [Flutter 使用说明](flutter_app/README.md)。`.github/workflows/flutter.yml` 提供多平台检查；[此前六平台构建记录](https://github.com/CherryIce/langpack-prototype/actions/runs/40858371621) 已成功，后续改动以对应提交的新检查结果为准。构建成功不代表真机验收或商店发布。
+
+原生 App 的默认在线代理需要安装包含本次改动的新版本；仅将网站设为公开不会改变已安装的旧版 App。旧版也可先把备用服务器地址填写为 `https://langpack-studio-oct29.neonkrill256.chatgpt.site`，无需填写 API 密钥。公共备用服务共享站点现有授权额度，并不承诺永久免费。

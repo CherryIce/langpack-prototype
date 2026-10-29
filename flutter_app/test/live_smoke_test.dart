@@ -41,6 +41,7 @@ class _QuotaPrimary extends http.BaseClient {
 
 void main() {
   const run = bool.fromEnvironment('RUN_LIVE_TRANSLATION');
+  const runPublicProxy = bool.fromEnvironment('RUN_PUBLIC_PROXY_TEST');
   const base = String.fromEnvironment(
     'API_BASE_URL',
     defaultValue: 'http://127.0.0.1:4180',
@@ -48,6 +49,32 @@ void main() {
   const output = String.fromEnvironment(
     'LIVE_OUTPUT_DIR',
     defaultValue: '../outputs/flutter-live',
+  );
+  test(
+    'native built-in public proxy works without any client credential or base URL',
+    () async {
+      final service = TranslationService(client: _QuotaPrimary());
+      addTearDown(service.dispose);
+      expect(await service.checkBackup(''), isTrue);
+      final result = await service.translate('登录', 'en', token: CancelToken());
+      expect(result.provider, 'ZTAITrans');
+      expect(result.text.trim(), isNotEmpty);
+      final dir = Directory(output)..createSync(recursive: true);
+      File('${dir.path}/flutter-default-public-proxy.json').writeAsStringSync(
+        jsonEncode({
+          'origin': defaultBackupServiceOrigin,
+          'configuredBaseUrl': '',
+          'clientCredential': false,
+          'quotaTrigger': 'simulated primary quota',
+          'translation': 'real public ZTAITrans proxy',
+          'text': result.text,
+          'provider': result.provider,
+          'testedAt': DateTime.now().toIso8601String(),
+        }),
+      );
+    },
+    skip: !runPublicProxy,
+    timeout: const Timeout(Duration(minutes: 12)),
   );
   test(
     'real text translation through primary and configured backup',

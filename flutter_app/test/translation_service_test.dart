@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:langpack/models.dart';
 import 'package:langpack/services/translation_service.dart';
 
 http.Response success(String text) => http.Response(
@@ -384,17 +385,78 @@ void main() {
     },
   );
 
-  test('native fallback requires explicitly configured server', () async {
-    final service = TranslationService(
-      client: MockClient((_) async => quota()),
-      minInterval: Duration.zero,
-    );
-    addTearDown(service.dispose);
-    await expectLater(
-      service.translate('登录', 'en', token: CancelToken()),
-      throwsA(failure('BACKUP_NOT_CONFIGURED', fatal: true)),
-    );
-  });
+  test(
+    'native default and legacy empty settings use public proxy without a key',
+    () async {
+      final settings = AppSettings.fromJson({'apiBaseUrl': ''});
+      var primaryCalls = 0;
+      final requests = <http.Request>[];
+      final service = TranslationService(
+        client: MockClient((request) async {
+          if (request.url.host == 'api.mymemory.translated.net') {
+            primaryCalls++;
+            return quota();
+          }
+          requests.add(request);
+          expect(request.url.origin, defaultBackupServiceOrigin);
+          expect(
+            request.headers.keys.any(
+              (key) => RegExp(
+                r'authorization|api.?key|cookie',
+                caseSensitive: false,
+              ).hasMatch(key),
+            ),
+            isFalse,
+          );
+          if (request.method == 'GET') {
+            expect(request.url.path, '/api/translation/status');
+            return http.Response('{"backupConfigured":true}', 200);
+          }
+          expect(request.url.path, '/api/translation/backup');
+          expect(jsonDecode(request.body), {'content': '登录', 'locale': 'en'});
+          return backup('Log in');
+        }),
+        minInterval: Duration.zero,
+      );
+      addTearDown(service.dispose);
+      expect(await service.checkBackup(settings.apiBaseUrl), isTrue);
+      final result = await service.translate(
+        '登录',
+        'en',
+        token: CancelToken(),
+        apiBaseUrl: settings.apiBaseUrl,
+      );
+      expect(result.text, 'Log in');
+      expect(result.provider, 'ZTAITrans');
+      expect(primaryCalls, 1);
+      expect(requests.length, 2);
+    },
+  );
+
+  test(
+    'explicit custom proxy is retained instead of the built-in default',
+    () async {
+      final service = TranslationService(
+        client: MockClient((request) async {
+          if (request.url.host == 'api.mymemory.translated.net') return quota();
+          expect(request.url.origin, 'https://custom.example');
+          return backup('Custom login');
+        }),
+        minInterval: Duration.zero,
+      );
+      addTearDown(service.dispose);
+      final settings = AppSettings.fromJson({
+        'apiBaseUrl': 'https://custom.example',
+      });
+      final result = await service.translate(
+        '登录',
+        'en',
+        token: CancelToken(),
+        apiBaseUrl: settings.apiBaseUrl,
+      );
+      expect(result.text, 'Custom login');
+    },
+  );
 
   for (final item in [
     (401, 'BACKUP_AUTH', true, false),

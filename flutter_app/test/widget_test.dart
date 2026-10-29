@@ -45,6 +45,12 @@ class _DelayedImportController extends AppController {
   Future<List<DocumentBlock>> pickDocument() => pending.future;
 }
 
+class _DelayedBackupController extends AppController {
+  final pending = Completer<bool>();
+  @override
+  Future<bool> checkBackup() => pending.future;
+}
+
 Future<AppController> _controller({_CapturingExport? exporter}) async {
   SharedPreferences.setMockInitialValues({});
   final controller = AppController(
@@ -62,6 +68,72 @@ Future<void> _tap(WidgetTester tester, Finder finder) async {
 }
 
 void main() {
+  testWidgets(
+    'restoring the built-in proxy ignores a late custom server status',
+    (tester) async {
+      tester.view.physicalSize = const Size(1440, 1100);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      SharedPreferences.setMockInitialValues({});
+      final controller = _DelayedBackupController();
+      await controller.initialize();
+      await controller.saveSettings(
+        email: '',
+        apiBaseUrl: 'https://custom.example',
+        includeSource: true,
+      );
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(LangPackApp(controller: controller));
+      await tester.pumpAndSettle();
+      await _tap(tester, find.text('偏好设置'));
+      await _tap(tester, find.text('检测服务'));
+      await _tap(tester, find.text('恢复内置在线服务'));
+      controller.pending.complete(false);
+      await tester.pumpAndSettle();
+      expect(controller.settings.apiBaseUrl, isEmpty);
+      expect(find.text('已选用内置在线服务，无需配置密钥'), findsOneWidget);
+      expect(find.text('当前服务器尚未启用备用翻译'), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'native settings show built-in proxy and can restore it from a custom server',
+    (tester) async {
+      tester.view.physicalSize = const Size(1440, 1100);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final controller = await _controller();
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(LangPackApp(controller: controller));
+      await tester.pumpAndSettle();
+      await _tap(tester, find.text('偏好设置'));
+      expect(find.text('已选用内置在线服务，无需配置密钥'), findsOneWidget);
+      expect(find.text(defaultBackupServiceOrigin), findsOneWidget);
+      expect(find.text('自定义服务器（可选）'), findsOneWidget);
+      expect(find.text('恢复内置在线服务'), findsNothing);
+      await controller.saveSettings(
+        email: '',
+        apiBaseUrl: 'https://custom.example',
+        includeSource: true,
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('https://custom.example'), findsOneWidget);
+      await _tap(tester, find.text('恢复内置在线服务'));
+      expect(controller.settings.apiBaseUrl, isEmpty);
+      expect(find.text(defaultBackupServiceOrigin), findsOneWidget);
+      final stored = (await SharedPreferences.getInstance()).getString(
+        AppController.storageKey,
+      )!;
+      expect(stored, contains('"apiBaseUrl":""'));
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
   testWidgets(
     'mobile starts with an empty workspace and can create a project',
     (tester) async {

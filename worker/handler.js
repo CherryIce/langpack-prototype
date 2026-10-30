@@ -3,9 +3,9 @@ const UPSTREAM = 'https://aitrans-iqwek72342.futureinvest.id/api/translate/text'
 const MAX_REQUEST_BYTES = 256 * 1024;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_CONTENT_CHARACTERS = 50000;
-// Resource/export codes align with MediaServiceClient. Simplified Chinese is source-only.
+// Resource/export codes align with MediaServiceClient. The chosen source is excluded per request.
 const TARGETS = Object.freeze({
-  'zh-Hant': 'Traditional Chinese', en: 'English',
+  'zh-Hans': 'Simplified Chinese', 'zh-Hant': 'Traditional Chinese', en: 'English',
   'pt-BR': 'Portuguese (Brazil)', 'pt-PT': 'Portuguese (Portugal)',
   ms: 'Malay', th: 'Thai', fr: 'French', es: 'Spanish', ar: 'Arabic',
   fil: 'Filipino', vi: 'Vietnamese', ru: 'Russian', tr: 'Turkish',
@@ -16,6 +16,7 @@ const TARGETS = Object.freeze({
   hr: 'Croatian', si: 'Sinhala'
 });
 const TARGET_ALIASES = Object.freeze({
+  'zh-Hans': ['simplified chinese', 'zh-hans', 'zh-cn', 'zh_cn', '简体中文', '簡體中文'],
   en: ['english', 'en', 'en-us', 'en_us', 'en-gb', 'en_gb', '英语'],
   ja: ['japanese', 'ja', 'ja-jp', 'ja_jp', '日语'],
   ko: ['korean', 'ko', 'ko-kr', 'ko_kr', '韩语'],
@@ -125,13 +126,13 @@ function validOutput(payload, source, locale, secret) {
 }
 
 const PROVIDER_LOCALES = Object.freeze({
-  MyMemory: Object.freeze(Object.fromEntries(Object.keys(TARGETS).filter(code => !['pt-BR', 'fil', 'nb'].includes(code)).map(code => [code, ({ 'zh-Hant': 'zh-TW', si: 'si-LK' })[code] || code]))),
+  MyMemory: Object.freeze(Object.fromEntries(Object.keys(TARGETS).filter(code => !['pt-BR', 'fil', 'nb'].includes(code)).map(code => [code, ({ 'zh-Hans': 'zh-CN', 'zh-Hant': 'zh-TW', si: 'si-LK' })[code] || code]))),
   Azure: Object.freeze(Object.fromEntries(Object.keys(TARGETS).map(code => [code, ({ 'pt-BR': 'pt', 'pt-PT': 'pt-pt' })[code] || code]))),
-  Google: Object.freeze(Object.fromEntries(Object.keys(TARGETS).filter(code => code !== 'nb').map(code => [code, ({ 'zh-Hant': 'zh-TW' })[code] || code]))),
-  DeepL: Object.freeze(Object.fromEntries(Object.keys(TARGETS).filter(code => !['fil', 'si'].includes(code)).map(code => [code, ({ 'zh-Hant': 'ZH-HANT', en: 'EN-US', 'pt-BR': 'PT-BR', 'pt-PT': 'PT-PT' })[code] || code.toUpperCase()]))),
-  Alibaba: Object.freeze(Object.fromEntries(Object.keys(TARGETS).filter(code => !['pt-BR', 'pt-PT', 'nb', 'hr', 'uk'].includes(code)).map(code => [code, code === 'zh-Hant' ? 'zh-tw' : code]))),
-  Baidu: Object.freeze({ 'zh-Hant': 'cht', en: 'en', ms: 'may', th: 'th', fr: 'fra', es: 'spa', ar: 'ara', fil: 'fil', vi: 'vie', ru: 'ru', tr: 'tr', id: 'id', ja: 'jp', ko: 'kor', de: 'de', hi: 'hi', hu: 'hu', it: 'it', ro: 'rom', sv: 'swe', bg: 'bul', pl: 'pl', da: 'dan', fi: 'fin', nl: 'nl', cs: 'cs', sk: 'sk', uk: 'ukr', el: 'el', nb: 'nob', hr: 'hrv', si: 'sin' }),
-  Tencent: Object.freeze({ 'zh-Hant': 'zh-TW', en: 'en', ms: 'ms', th: 'th', fr: 'fr', es: 'es', ar: 'ar', vi: 'vi', ru: 'ru', tr: 'tr', id: 'id', ja: 'ja', ko: 'ko', de: 'de', it: 'it' })
+  Google: Object.freeze(Object.fromEntries(Object.keys(TARGETS).filter(code => code !== 'nb').map(code => [code, ({ 'zh-Hans': 'zh-CN', 'zh-Hant': 'zh-TW' })[code] || code]))),
+  DeepL: Object.freeze(Object.fromEntries(Object.keys(TARGETS).filter(code => !['fil', 'si'].includes(code)).map(code => [code, ({ 'zh-Hans': 'ZH-HANS', 'zh-Hant': 'ZH-HANT', en: 'EN-US', 'pt-BR': 'PT-BR', 'pt-PT': 'PT-PT' })[code] || code.toUpperCase()]))),
+  Alibaba: Object.freeze(Object.fromEntries(Object.keys(TARGETS).filter(code => !['pt-BR', 'pt-PT', 'nb', 'hr', 'uk'].includes(code)).map(code => [code, code === 'zh-Hans' ? 'zh' : code === 'zh-Hant' ? 'zh-tw' : code]))),
+  Baidu: Object.freeze({ 'zh-Hans': 'zh', 'zh-Hant': 'cht', en: 'en', ms: 'may', th: 'th', fr: 'fra', es: 'spa', ar: 'ara', fil: 'fil', vi: 'vie', ru: 'ru', tr: 'tr', id: 'id', ja: 'jp', ko: 'kor', de: 'de', hi: 'hi', hu: 'hu', it: 'it', ro: 'rom', sv: 'swe', bg: 'bul', pl: 'pl', da: 'dan', fi: 'fin', nl: 'nl', cs: 'cs', sk: 'sk', uk: 'ukr', el: 'el', nb: 'nob', hr: 'hrv', si: 'sin' }),
+  Tencent: Object.freeze({ 'zh-Hans': 'zh', 'zh-Hant': 'zh-TW', en: 'en', ms: 'ms', th: 'th', fr: 'fr', es: 'es', ar: 'ar', vi: 'vi', ru: 'ru', tr: 'tr', id: 'id', ja: 'ja', ko: 'ko', de: 'de', it: 'it' })
 });
 const PROVIDER_NAMES = ['MyMemory', 'ZTAITrans', 'DeepL', 'Azure', 'Google', 'Baidu', 'Tencent', 'Alibaba'];
 const plainObject = value => value && typeof value === 'object' && !Array.isArray(value);
@@ -196,17 +197,18 @@ async function hmac(hash, key, value) {
 }
 const rpcEncode = value => encodeURIComponent(value).replace(/[!'()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
 const rpcForm = values => Object.keys(values).sort().map(key => rpcEncode(key) + '=' + rpcEncode(values[key])).join('&');
-async function providerUpstream(provider, credentials, content, locale) {
+async function providerUpstream(provider, credentials, content, locale, sourceLocale = 'zh-Hans') {
   const headers = { 'Content-Type': 'application/json' };
+  const chineseSource = sourceLocale === 'zh-Hans';
   if (provider === 'Baidu') {
     const salt = String(crypto.getRandomValues(new Uint32Array(1))[0]);
-    const form = { q: content, from: 'zh', to: PROVIDER_LOCALES.Baidu[locale], appid: credentials.appId, salt, sign: baiduMD5(credentials.appId + content + salt + credentials.secretKey) };
+    const form = { q: content, from: chineseSource ? 'zh' : 'en', to: PROVIDER_LOCALES.Baidu[locale], appid: credentials.appId, salt, sign: baiduMD5(credentials.appId + content + salt + credentials.secretKey) };
     return { url: 'https://fanyi-api.baidu.com/api/trans/vip/translate', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, encodedBody: new URLSearchParams(form).toString() };
   }
   if (provider === 'Tencent') {
     const timestamp = Math.floor(Date.now() / 1000), date = new Date(timestamp * 1000).toISOString().slice(0, 10);
     const host = 'tmt.tencentcloudapi.com', type = 'application/json; charset=utf-8';
-    const encodedBody = JSON.stringify({ SourceText: content, Source: 'zh', Target: PROVIDER_LOCALES.Tencent[locale], ProjectId: 0 });
+    const encodedBody = JSON.stringify({ SourceText: content, Source: chineseSource ? 'zh' : 'en', Target: PROVIDER_LOCALES.Tencent[locale], ProjectId: 0 });
     const canonical = 'POST\n/\n\ncontent-type:' + type + '\nhost:' + host + '\nx-tc-action:texttranslate\n\ncontent-type;host;x-tc-action\n' + await sha256(encodedBody);
     const scope = date + '/tmt/tc3_request', toSign = 'TC3-HMAC-SHA256\n' + timestamp + '\n' + scope + '\n' + await sha256(canonical);
     const dateKey = await hmac('SHA-256', 'TC3' + credentials.secretKey, date);
@@ -216,18 +218,18 @@ async function providerUpstream(provider, credentials, content, locale) {
   }
   if (provider === 'Alibaba') {
     const common = { AccessKeyId: credentials.accessKeyId, Action: 'TranslateGeneral', Format: 'JSON', Version: '2018-10-12', SignatureMethod: 'HMAC-SHA1', SignatureVersion: '1.0', Timestamp: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'), SignatureNonce: crypto.randomUUID(), RegionId: 'cn-hangzhou' };
-    const form = { FormatType: 'text', SourceLanguage: 'zh', TargetLanguage: PROVIDER_LOCALES.Alibaba[locale], SourceText: content, Scene: 'general' };
+    const form = { FormatType: 'text', SourceLanguage: chineseSource ? 'zh' : 'en', TargetLanguage: PROVIDER_LOCALES.Alibaba[locale], SourceText: content, Scene: 'general' };
     const signature = await hmac('SHA-1', credentials.accessKeySecret + '&', 'POST&%2F&' + rpcEncode(rpcForm({ ...common, ...form })));
     common.Signature = btoa(String.fromCharCode(...new Uint8Array(signature)));
     // As in Alibaba's official pop-core RPC client, every signed parameter is
     // sent once in the form body, keeping both credentials and text out of URLs.
     return { url: 'https://mt.cn-hangzhou.aliyuncs.com/', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, encodedBody: rpcForm({ ...common, ...form }) };
   }
-  if (provider === 'MyMemory') return { url: 'https://api.mymemory.translated.net/get?' + new URLSearchParams({ q: content, langpair: 'zh-CN|' + PROVIDER_LOCALES.MyMemory[locale], mt: '1', key: credentials.apiKey, ...(credentials.email ? { de: credentials.email } : {}) }), method: 'GET', headers: { Accept: 'application/json' } };
+  if (provider === 'MyMemory') return { url: 'https://api.mymemory.translated.net/get?' + new URLSearchParams({ q: content, langpair: (chineseSource ? 'zh-CN' : 'en') + '|' + PROVIDER_LOCALES.MyMemory[locale], mt: '1', key: credentials.apiKey, ...(credentials.email ? { de: credentials.email } : {}) }), method: 'GET', headers: { Accept: 'application/json' } };
   if (provider === 'ZTAITrans') return { url: UPSTREAM, headers: { ...headers, 'X-Api-Key': credentials.apiKey }, body: { model: 'fast', targetLanguage: TARGETS[locale], items: [{ id: 'segment-1', content }], ...(credentials.tenantId ? { tenantId: credentials.tenantId } : {}) } };
-  if (provider === 'DeepL') return { url: `https://${credentials.plan === 'pro' ? 'api' : 'api-free'}.deepl.com/v2/translate`, headers: { ...headers, Authorization: 'DeepL-Auth-Key ' + credentials.apiKey }, body: { text: [content], source_lang: 'ZH', target_lang: PROVIDER_LOCALES.DeepL[locale] } };
-  if (provider === 'Azure') return { url: 'https://api.cognitive.microsofttranslator.com/translate?' + new URLSearchParams({ 'api-version': '3.0', from: 'zh-Hans', to: PROVIDER_LOCALES.Azure[locale] }), headers: { ...headers, 'Ocp-Apim-Subscription-Key': credentials.apiKey, ...(credentials.region ? { 'Ocp-Apim-Subscription-Region': credentials.region } : {}) }, body: [{ Text: content }] };
-  return { url: 'https://translation.googleapis.com/language/translate/v2', headers: { ...headers, 'X-Goog-Api-Key': credentials.apiKey }, body: { q: [content], source: 'zh-CN', target: PROVIDER_LOCALES.Google[locale], format: 'text', model: 'nmt' } };
+  if (provider === 'DeepL') return { url: `https://${credentials.plan === 'pro' ? 'api' : 'api-free'}.deepl.com/v2/translate`, headers: { ...headers, Authorization: 'DeepL-Auth-Key ' + credentials.apiKey }, body: { text: [content], source_lang: chineseSource ? 'ZH' : 'EN', target_lang: PROVIDER_LOCALES.DeepL[locale] } };
+  if (provider === 'Azure') return { url: 'https://api.cognitive.microsofttranslator.com/translate?' + new URLSearchParams({ 'api-version': '3.0', from: chineseSource ? 'zh-Hans' : 'en', to: PROVIDER_LOCALES.Azure[locale] }), headers: { ...headers, 'Ocp-Apim-Subscription-Key': credentials.apiKey, ...(credentials.region ? { 'Ocp-Apim-Subscription-Region': credentials.region } : {}) }, body: [{ Text: content }] };
+  return { url: 'https://translation.googleapis.com/language/translate/v2', headers: { ...headers, 'X-Goog-Api-Key': credentials.apiKey }, body: { q: [content], source: chineseSource ? 'zh-CN' : 'en', target: PROVIDER_LOCALES.Google[locale], format: 'text', model: 'nmt' } };
 }
 function genericUpstreamFailure(provider, response, payload) {
   const status = response.status;
@@ -284,7 +286,7 @@ function decodeProviderText(value) {
     return ({ '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&apos;': "'" })[entity.toLowerCase()] || entity;
   });
 }
-function genericOutput(provider, payload, locale, credentials, source) {
+function genericOutput(provider, payload, locale, credentials, source, sourceLocale = 'zh-Hans') {
   let text;
   if (provider === 'MyMemory' && typeof payload?.responseData?.translatedText === 'string') text = decodeProviderText(payload.responseData.translatedText);
   if (provider === 'DeepL' && Array.isArray(payload?.translations) && payload.translations.length === 1) text = payload.translations[0]?.text;
@@ -293,8 +295,8 @@ function genericOutput(provider, payload, locale, credentials, source) {
     if (typeof translation?.to === 'string' && translation.to.toLowerCase() === PROVIDER_LOCALES.Azure[locale].toLowerCase()) text = translation.text;
   }
   if (provider === 'Google' && Array.isArray(payload?.data?.translations) && payload.data.translations.length === 1 && typeof payload.data.translations[0]?.translatedText === 'string') text = decodeProviderText(payload.data.translations[0].translatedText);
-  if (provider === 'Baidu' && payload?.from === 'zh' && payload?.to === PROVIDER_LOCALES.Baidu[locale] && Array.isArray(payload?.trans_result) && payload.trans_result.length > 0 && payload.trans_result.every(item => typeof item?.src === 'string' && typeof item?.dst === 'string' && item.dst.trim()) && payload.trans_result.map(item => item.src).join('\n') === source) text = payload.trans_result.map(item => item.dst).join('\n');
-  if (provider === 'Tencent' && payload?.Response?.Source === 'zh' && payload?.Response?.Target === PROVIDER_LOCALES.Tencent[locale]) text = payload.Response.TargetText;
+  if (provider === 'Baidu' && payload?.from === (sourceLocale === 'en' ? 'en' : 'zh') && payload?.to === PROVIDER_LOCALES.Baidu[locale] && Array.isArray(payload?.trans_result) && payload.trans_result.length > 0 && payload.trans_result.every(item => typeof item?.src === 'string' && typeof item?.dst === 'string' && item.dst.trim()) && payload.trans_result.map(item => item.src).join('\n') === source) text = payload.trans_result.map(item => item.dst).join('\n');
+  if (provider === 'Tencent' && payload?.Response?.Source === (sourceLocale === 'en' ? 'en' : 'zh') && payload?.Response?.Target === PROVIDER_LOCALES.Tencent[locale]) text = payload.Response.TargetText;
   if (provider === 'Alibaba') text = payload?.Data?.Translated;
   const secrets = ['apiKey', 'appId', 'secretId', 'secretKey', 'accessKeyId', 'accessKeySecret'].map(field => credentials[field]).filter(value => typeof value === 'string' && value);
   if (typeof text !== 'string' || !text.trim() || secrets.some(secret => text.includes(secret)) || /^(?:\s*[.…]\s*)+$/u.test(text) || /^\s*(?:<!doctype html|<html(?:\s|>)|Internal Server Error\s*$)/i.test(text)) return null;
@@ -383,7 +385,7 @@ export function createHandler({ fetchImpl = (...args) => fetch(...args), timeout
       if (error.code === 'TOO_LARGE') return problem(413, 'BACKUP_TOO_LARGE', '这段内容超过请求大小限制，请拆分后重试。');
       return problem(400, 'BACKUP_JSON', '翻译请求不是有效的 JSON。');
     }
-    const allowed = legacy ? ['content', 'locale'] : validating ? ['provider', 'credentials'] : ['provider', 'content', 'locale', 'credentials'];
+    const allowed = legacy ? ['content', 'locale', 'sourceLocale'] : validating ? ['provider', 'credentials'] : ['provider', 'content', 'locale', 'sourceLocale', 'credentials'];
     if (!plainObject(body) || Object.keys(body).some(key => !allowed.includes(key))) return problem(400, 'BACKUP_FIELDS', '请求中包含不支持的字段。');
     const provider = legacy ? 'ZTAITrans' : body.provider;
     if (!PROVIDER_NAMES.includes(provider)) return problem(400, 'PROVIDER_CONFIG', '请选择支持的翻译平台。', { fatal: true });
@@ -392,7 +394,9 @@ export function createHandler({ fetchImpl = (...args) => fetch(...args), timeout
     if (validating) body = { ...body, content: '好', locale: 'en' };
     if (typeof body.content !== 'string' || !body.content.trim()) return providerProblem(provider, 400, legacy ? 'BACKUP_EMPTY' : 'PROVIDER_REQUEST', '请先提供需要翻译的原文。');
     if (Array.from(body.content).length > MAX_CONTENT_CHARACTERS) return providerProblem(provider, 413, 'BACKUP_TOO_LARGE', '单段原文不能超过 50,000 个字符，请拆分后重试。');
-    if (typeof body.locale !== 'string' || !Object.hasOwn(TARGETS, body.locale)) return providerProblem(provider, 400, legacy ? 'BACKUP_LANGUAGE' : 'PROVIDER_UNSUPPORTED', '当前目标语言不受支持。', { unsupported: true });
+    const sourceLocale = body.sourceLocale === undefined ? 'zh-Hans' : body.sourceLocale;
+    if (!['zh-Hans', 'en'].includes(sourceLocale)) return providerProblem(provider, 400, legacy ? 'BACKUP_LANGUAGE' : 'PROVIDER_UNSUPPORTED', '当前源语言不受支持。', { unsupported: true });
+    if (typeof body.locale !== 'string' || !Object.hasOwn(TARGETS, body.locale) || body.locale === sourceLocale) return providerProblem(provider, 400, legacy ? 'BACKUP_LANGUAGE' : 'PROVIDER_UNSUPPORTED', '当前目标语言不受支持。', { unsupported: true });
     if (provider !== 'ZTAITrans' && !Object.hasOwn(PROVIDER_LOCALES[provider], body.locale)) return providerProblem(provider, 400, 'PROVIDER_UNSUPPORTED', '此平台不支持该目标语言的精确代码，请选择其他已配置平台。', { unsupported: true });
     let credentials = legacy ? { apiKey: serverKey } : body.credentials;
     if (validating && provider === 'MyMemory' && plainObject(credentials) && (credentials.apiKey === undefined || credentials.apiKey === '') && credentialShape(provider, { ...credentials, apiKey: 'anonymous-validation-placeholder' })) return validationResult(provider, 'valid', 'anonymous', '匿名模式无需 API 密钥，本次未调用平台或验证私有词库。');
@@ -406,7 +410,7 @@ export function createHandler({ fetchImpl = (...args) => fetch(...args), timeout
     const characterLimit = { Baidu: 1000, Tencent: 2000, Alibaba: 5000 }[provider];
     if (characterLimit && Array.from(body.content).length > characterLimit || provider === 'Baidu' && contentBytes > 6000) return providerProblem(provider, 413, 'BACKUP_TOO_LARGE', '这段内容超过该平台单次请求限制，请拆分后重试。');
     let upstream;
-    try { upstream = await providerUpstream(provider, credentials, body.content, body.locale); }
+    try { upstream = await providerUpstream(provider, credentials, body.content, body.locale, sourceLocale); }
     catch (_) { return providerProblem(provider, 502, 'PROVIDER_SERVICE', '无法准备该平台请求，请稍后重试。', { retryable: true }); }
     const upstreamBody = upstream.encodedBody ?? JSON.stringify(upstream.body);
     const maximum = provider === 'Google' ? 100 * 1024 : provider === 'DeepL' ? 128 * 1024 : MAX_REQUEST_BYTES;
@@ -437,7 +441,7 @@ export function createHandler({ fetchImpl = (...args) => fetch(...args), timeout
         if (failure.status >= 500) return providerProblem(provider, 502, 'PROVIDER_SERVICE', '该平台暂时不可用，请稍后重试。', { retryable: !!diagnostic.retryable });
         return providerProblem(provider, 400, 'PROVIDER_REQUEST', '该平台拒绝了请求，请检查原文和目标语言。');
       }
-      const text = provider === 'ZTAITrans' ? validOutput(payload, body.content, body.locale, credentials.apiKey) : genericOutput(provider, payload, body.locale, credentials, body.content);
+      const text = provider === 'ZTAITrans' ? validOutput(payload, body.content, body.locale, credentials.apiKey) : genericOutput(provider, payload, body.locale, credentials, body.content, sourceLocale);
       if (text === null || body.credentials?.developerToken && text.includes(body.credentials.developerToken)) return providerProblem(provider, 502, legacy ? 'BACKUP_RESPONSE' : 'PROVIDER_RESPONSE', '平台返回了不完整或不匹配的结果，未保存为译文。');
       return json({ text, provider, ...(provider === 'ZTAITrans' ? { model: 'fast' } : provider === 'Google' ? { model: 'nmt' } : {}) });
     } catch (_) {

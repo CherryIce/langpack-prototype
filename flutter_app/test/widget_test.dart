@@ -30,6 +30,7 @@ class _FixtureTranslation extends TranslationService {
     String source,
     String locale, {
     required CancelToken token,
+    String sourceLocale = 'zh-Hans',
     String email = '',
     String apiBaseUrl = '',
     bool bypassCache = false,
@@ -81,6 +82,80 @@ Future<void> _tap(WidgetTester tester, Finder finder) async {
 }
 
 void main() {
+  testWidgets('English target summary inflects source string count', (
+    tester,
+  ) async {
+    final controller = await _controller();
+    controller.setInterfaceLocale('en');
+    controller.createProject('English QA');
+    controller.addBlocks([DocumentBlock('Good morning')]);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(LangPackApp(controller: controller));
+    await tester.pumpAndSettle();
+    await _tap(tester, find.text('English QA').first);
+    await _tap(tester, find.text('Translate missing items'));
+    expect(find.text('1 string'), findsOneWidget);
+    expect(find.text('1 strings'), findsNothing);
+    controller.addBlocks([DocumentBlock('Good evening')]);
+    await controller.flush();
+    await tester.pumpAndSettle();
+    expect(find.text('2 strings'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets(
+    'English switch creates an English-source project and keeps its source fixed',
+    (tester) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final controller = await _controller();
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(LangPackApp(controller: controller));
+      await tester.pumpAndSettle();
+      await _tap(tester, find.text('EN'));
+      expect(controller.settings.interfaceLocale, 'en');
+      expect(find.text('My projects'), findsWidgets);
+      await _tap(tester, find.text('New project'));
+      final sourceChoice = tester.widget<SegmentedButton<String>>(
+        find.byKey(const ValueKey('new-project-source-locale')),
+      );
+      expect(sourceChoice.selected, {'en'});
+      await tester.enterText(
+        find.byType(TextFormField).first,
+        'English strings',
+      );
+      await _tap(tester, find.widgetWithText(FilledButton, 'Create project'));
+      expect(controller.currentProject!.sourceLocale, 'en');
+      expect(find.text('Source: English (en)'), findsOneWidget);
+      await _tap(tester, find.text('中文').first);
+      expect(controller.settings.interfaceLocale, 'zh');
+      expect(controller.currentProject!.sourceLocale, 'en');
+      expect(find.text('源语言：英文（en）'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'English interface labels an existing Chinese-source project correctly',
+    (tester) async {
+      final controller = await _controller();
+      controller.createProject('Existing project');
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(LangPackApp(controller: controller));
+      await tester.pumpAndSettle();
+      await _tap(tester, find.text('EN'));
+      await _tap(tester, find.text('Existing project').first);
+      expect(controller.currentProject!.sourceLocale, 'zh-Hans');
+      expect(find.text('Source: Simplified Chinese (zh-Hans)'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
   testWidgets(
     'provider credentials are masked and session-only on a narrow settings screen',
     (tester) async {

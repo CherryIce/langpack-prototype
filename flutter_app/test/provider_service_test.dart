@@ -51,6 +51,41 @@ void configure(
 );
 
 void main() {
+  test(
+    'proxy includes English source and keeps translation caches separate',
+    () async {
+      final sources = <String>[];
+      final service = TranslationService(
+        client: MockClient((request) async {
+          final body = jsonDecode(request.body) as Map;
+          sources.add(
+            body['sourceLocale'] as String? ?? '(legacy Chinese request)',
+          );
+          expect(body['provider'], 'DeepL');
+          expect(body['locale'], 'ja');
+          return proxy('DeepL', 'メニュー');
+        }),
+        minInterval: Duration.zero,
+      );
+      addTearDown(service.dispose);
+      configure(
+        service,
+        ['DeepL'],
+        credentials: {
+          'DeepL': {'apiKey': 'test_api_fixture_value_123', 'plan': 'free'},
+        },
+      );
+      await service.translate(
+        'Menu',
+        'ja',
+        sourceLocale: 'en',
+        token: CancelToken(),
+      );
+      await service.translate('Menu', 'ja', token: CancelToken());
+      expect(sources, ['en', '(legacy Chinese request)']);
+    },
+  );
+
   for (final statuses in [(401, 200), (403, 200), (200, 401)]) {
     test(
       'MyMemory auth $statuses overrides a contradictory quota signal',

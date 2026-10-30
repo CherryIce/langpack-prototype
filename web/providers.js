@@ -10,8 +10,10 @@
   const LOCAL_KEY = 'langpack-provider-credentials-v1';
   const known = value => names.includes(value);
   const normalizeOrder = values => [...new Set((Array.isArray(values) ? values : []).filter(known))];
-  function supports(provider, locale) {
+  function supports(provider, locale, sourceLocale = 'zh-Hans') {
     if (!known(provider)) return false;
+    if (locale === sourceLocale || !['zh-Hans', 'en'].includes(sourceLocale)) return false;
+    if (locale === 'zh-Hans') return sourceLocale === 'en';
     if (provider === 'MyMemory') return !['pt-BR', 'fil', 'nb'].includes(locale);
     if (provider === 'DeepL') return !['fil', 'si'].includes(locale);
     if (provider === 'Google') return locale !== 'nb';

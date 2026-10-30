@@ -122,6 +122,58 @@ class _Workspace extends StatefulWidget {
 
 class _WorkspaceState extends State<_Workspace> {
   AppController get c => widget.controller;
+  static const _englishLanguageNames = <String, String>{
+    'zh-Hans': 'Simplified Chinese',
+    'zh-Hant': 'Traditional Chinese',
+    'en': 'English',
+    'pt-BR': 'Portuguese (Brazil)',
+    'pt-PT': 'Portuguese (Portugal)',
+    'ms': 'Malay',
+    'th': 'Thai',
+    'fr': 'French',
+    'es': 'Spanish',
+    'ar': 'Arabic',
+    'fil': 'Filipino',
+    'vi': 'Vietnamese',
+    'ru': 'Russian',
+    'tr': 'Turkish',
+    'id': 'Indonesian',
+    'ja': 'Japanese',
+    'ko': 'Korean',
+    'de': 'German',
+    'hi': 'Hindi',
+    'hu': 'Hungarian',
+    'it': 'Italian',
+    'ro': 'Romanian',
+    'sv': 'Swedish',
+    'bg': 'Bulgarian',
+    'pl': 'Polish',
+    'da': 'Danish',
+    'fi': 'Finnish',
+    'nl': 'Dutch',
+    'cs': 'Czech',
+    'sk': 'Slovak',
+    'uk': 'Ukrainian',
+    'el': 'Greek',
+    'nb': 'Norwegian Bokmål',
+    'hr': 'Croatian',
+    'si': 'Sinhala',
+  };
+  bool get _en => c.settings.interfaceLocale == 'en';
+  String _t(String zh, String en) => _en ? en : zh;
+  String _sourceName(Project project) => project.sourceLocale == 'en'
+      ? _t('英文', 'English')
+      : _t('中文', 'Simplified Chinese');
+  String _languageLabel(Language language) => _en
+      ? _englishLanguageNames[language.code] ?? language.nativeName
+      : language.name;
+  String _localeLabel(String code, {String? sourceLocale}) {
+    final language = targetLanguagesFor(
+      sourceLocale ?? c.currentProject?.sourceLocale ?? 'zh-Hans',
+    ).where((item) => item.code == code).firstOrNull;
+    return language == null ? code : _languageLabel(language);
+  }
+
   _View _view = _View.home;
   final _input = TextEditingController();
   final _prefix = TextEditingController();
@@ -183,12 +235,72 @@ class _WorkspaceState extends State<_Workspace> {
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(text),
+          content: Text(_localizeError(text)),
           backgroundColor: error ? const Color(0xFF9B4B39) : _ink,
           duration: Duration(seconds: error ? 7 : 4),
         ),
       );
     });
+  }
+
+  String _localizeError(String text) {
+    if (!_en || !RegExp(r'[\u3400-\u9fff]').hasMatch(text)) return text;
+    final raw = text.replaceFirst(RegExp(r'^FormatException:\s*'), '');
+    const known = <String, String>{
+      '请输入项目名称。': 'Enter a project name.',
+      '请先选择文案及目标语言。': 'Select source strings and target languages first.',
+      '请至少选择一条文案。': 'Select at least one source string.',
+      '请至少选择一种目标语言。': 'Select at least one target language.',
+      '中文原文不能为空。': 'Source text cannot be empty.',
+      '英文原文不能为空。': 'Source text cannot be empty.',
+      '没有待翻译文案，已保留成功及人工校对的结果。':
+          'Nothing new to translate. Completed and reviewed results are preserved.',
+      '翻译已暂停，成功结果已保留。继续时处理未完成项。':
+          'Translation paused. Completed results are saved. Resume to process pending items.',
+      '翻译未完成，请检查网络后重试。':
+          'Translation did not finish. Check your connection and retry.',
+      '语言包已导出，快照已保存。': 'Language packs exported and a snapshot saved.',
+      '设置已保存。': 'Settings saved.',
+      '凭据已保存到本机，可随时清除。':
+          'Credentials saved on this device. You can clear them anytime.',
+      '凭据仅在本次会话使用。': 'Credentials are used only in this session.',
+      '该平台的会话及本机凭据已清除。':
+          'Session and device credentials for this provider were cleared.',
+      '不支持这个平台的凭据配置。': 'Credential setup for this provider is not supported.',
+      '请选择自备密钥或开发者访问码中的一种。':
+          'Choose either your own API key or a developer access code.',
+      '请完整填写该平台的所有必填凭据。': 'Fill in all required credentials for this provider.',
+      '请输入有效联系邮箱，或留空。': 'Enter a valid contact email or leave it blank.',
+      '本地保存失败，可能已超出存储空间。请导出语言包备份。':
+          'Local save failed, possibly because storage is full. Export a language pack backup.',
+      '本地数据未能读取，原始存档已保留。请导出当前工作备份。':
+          'Local data could not be read. The original archive is preserved; export a backup of your current work.',
+      '已保存的翻译凭据无法读取，请重新配置；项目数据已保留。':
+          'Saved provider credentials could not be read. Reconfigure them; project data is preserved.',
+      '本机凭据未完成保存或清除，旧的本机副本可能仍保留，请重试。':
+          'Device credentials could not be saved or cleared. An older copy may remain; retry.',
+    };
+    final translated = known[raw];
+    if (translated != null) return translated;
+    if (raw.contains('占位符')) {
+      return 'Placeholders do not match the source text. Fix them before confirming or exporting.';
+    }
+    if (raw.contains('额度') || raw.contains('余额')) {
+      return 'Provider quota or balance may be exhausted. Check the provider console or try another enabled provider.';
+    }
+    if (raw.contains('鉴权') || raw.contains('凭据')) {
+      return 'Provider authentication failed. Check the credentials and configuration.';
+    }
+    if (raw.contains('不支持') && raw.contains('语言')) {
+      return 'This target language is not supported by the selected provider.';
+    }
+    if (raw.contains('DOCX') || raw.contains('文档')) {
+      return 'The document could not be read. Use a valid, unencrypted TXT, Markdown, or DOCX file.';
+    }
+    if (raw.contains('网络') || raw.contains('请求')) {
+      return 'The request could not be completed. Check your connection and retry.';
+    }
+    return 'Could not complete this action. Check the input or provider settings and try again.';
   }
 
   Future<void> _guard(Future<void> Function() action) async {
@@ -223,17 +335,17 @@ class _WorkspaceState extends State<_Workspace> {
   };
 
   String get _title => switch (_view) {
-    _View.home => '我的项目',
+    _View.home => _t('我的项目', 'My projects'),
     _View.project => c.currentProject?.name ?? '项目',
-    _View.input => '文本输入',
-    _View.document => '文档导入',
-    _View.languages => '目标语言',
-    _View.progress => '翻译任务',
-    _View.review => '翻译校对',
-    _View.export => '导出语言包',
-    _View.tasks => '翻译任务',
-    _View.exports => '导出记录',
-    _View.settings => '偏好设置',
+    _View.input => _t('文本输入', 'Text input'),
+    _View.document => _t('文档导入', 'Import document'),
+    _View.languages => _t('目标语言', 'Target languages'),
+    _View.progress => _t('翻译任务', 'Translation task'),
+    _View.review => _t('翻译校对', 'Review translations'),
+    _View.export => _t('导出语言包', 'Export language packs'),
+    _View.tasks => _t('翻译任务', 'Translation tasks'),
+    _View.exports => _t('导出记录', 'Exports'),
+    _View.settings => _t('偏好设置', 'Settings'),
   };
 
   void _selectNavigation(int index) {
@@ -296,22 +408,22 @@ class _WorkspaceState extends State<_Workspace> {
           ? NavigationBar(
               selectedIndex: _navIndex,
               onDestinationSelected: _selectNavigation,
-              destinations: const [
+              destinations: [
                 NavigationDestination(
-                  icon: Icon(Icons.grid_view_rounded),
-                  label: '我的项目',
+                  icon: const Icon(Icons.grid_view_rounded),
+                  label: _t('我的项目', 'Projects'),
                 ),
                 NavigationDestination(
-                  icon: Icon(Icons.translate_rounded),
-                  label: '翻译任务',
+                  icon: const Icon(Icons.translate_rounded),
+                  label: _t('翻译任务', 'Tasks'),
                 ),
                 NavigationDestination(
-                  icon: Icon(Icons.folder_zip_outlined),
-                  label: '导出记录',
+                  icon: const Icon(Icons.folder_zip_outlined),
+                  label: _t('导出记录', 'Exports'),
                 ),
                 NavigationDestination(
-                  icon: Icon(Icons.tune_rounded),
-                  label: '设置',
+                  icon: const Icon(Icons.tune_rounded),
+                  label: _t('设置', 'Settings'),
                 ),
               ],
             )
@@ -332,10 +444,10 @@ class _WorkspaceState extends State<_Workspace> {
         _Brand(compact: !wide),
         const SizedBox(height: 42),
         if (wide)
-          const Padding(
+          Padding(
             padding: EdgeInsets.only(left: 14, bottom: 15),
             child: Text(
-              '工作空间',
+              _t('工作空间', 'Workspace'),
               style: TextStyle(fontSize: 11, letterSpacing: 1.5, color: _muted),
             ),
           ),
@@ -370,7 +482,14 @@ class _WorkspaceState extends State<_Workspace> {
                       if (wide) ...[
                         const SizedBox(width: 12),
                         Text(
-                          ['我的项目', '翻译任务', '导出记录', '偏好设置'][index],
+                          _en
+                              ? [
+                                  'Projects',
+                                  'Tasks',
+                                  'Exports',
+                                  'Settings',
+                                ][index]
+                              : ['我的项目', '翻译任务', '导出记录', '偏好设置'][index],
                           style: TextStyle(
                             fontSize: 13,
                             fontWeight: _navIndex == index
@@ -394,18 +513,21 @@ class _WorkspaceState extends State<_Workspace> {
               color: const Color(0xFFF5F8F0),
               borderRadius: BorderRadius.circular(12),
             ),
-            child: const Column(
+            child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(Icons.public_rounded, color: _green, size: 22),
-                SizedBox(height: 10),
+                const Icon(Icons.public_rounded, color: _green, size: 22),
+                const SizedBox(height: 10),
                 Text(
-                  '让表达，跨越语言',
+                  _t('让表达，跨越语言', 'Make every word travel'),
                   style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
                 ),
-                SizedBox(height: 6),
+                const SizedBox(height: 6),
                 Text(
-                  '从一句中文，到世界的每一种声音。',
+                  _t(
+                    '从一句中文，到世界的每一种声音。',
+                    'From your words to a world of languages.',
+                  ),
                   style: TextStyle(fontSize: 11, height: 1.8, color: _muted),
                 ),
               ],
@@ -429,12 +551,15 @@ class _WorkspaceState extends State<_Workspace> {
             ),
             if (wide) ...[
               const SizedBox(width: 11),
-              const Column(
+              Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('本地工作空间', style: TextStyle(fontSize: 12)),
-                  SizedBox(height: 3),
                   Text(
+                    _t('本地工作空间', 'Local workspace'),
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  const SizedBox(height: 3),
+                  const Text(
                     'LANGPACK STUDIO',
                     style: TextStyle(
                       fontSize: 8,
@@ -467,7 +592,10 @@ class _WorkspaceState extends State<_Workspace> {
         if (!compact) ...[
           const Icon(Icons.home_outlined, size: 18, color: _muted),
           const SizedBox(width: 10),
-          const Text('工作空间', style: TextStyle(fontSize: 12, color: _muted)),
+          Text(
+            _t('工作空间', 'Workspace'),
+            style: const TextStyle(fontSize: 12, color: _muted),
+          ),
           const SizedBox(width: 10),
           const Icon(Icons.chevron_right, size: 16, color: _muted),
           const SizedBox(width: 10),
@@ -481,7 +609,17 @@ class _WorkspaceState extends State<_Workspace> {
           ),
         ),
         const SizedBox(width: 10),
-        const _Tag('本地工作空间', icon: Icons.devices_outlined),
+        SegmentedButton<String>(
+          key: const ValueKey('interface-locale-switch'),
+          showSelectedIcon: false,
+          style: const ButtonStyle(visualDensity: VisualDensity.compact),
+          segments: const [
+            ButtonSegment(value: 'zh', label: Text('中文')),
+            ButtonSegment(value: 'en', label: Text('EN')),
+          ],
+          selected: {c.settings.interfaceLocale},
+          onSelectionChanged: (values) => c.setInterfaceLocale(values.first),
+        ),
       ],
     ),
   );
@@ -502,13 +640,16 @@ class _WorkspaceState extends State<_Workspace> {
             const SizedBox(width: 12),
             Expanded(
               child: Text(
-                '翻译进行中 · ${c.completed}/${c.total} · ${c.activeLabel}',
+                '${_t('翻译进行中', 'Translating')} · ${c.completed}/${c.total} · ${c.activeLabel}',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(fontSize: 12, color: _green),
               ),
             ),
-            const Text('查看', style: TextStyle(fontSize: 12, color: _green)),
+            Text(
+              _t('查看', 'View'),
+              style: const TextStyle(fontSize: 12, color: _green),
+            ),
             const Icon(Icons.chevron_right, size: 17, color: _green),
           ],
         ),
@@ -529,12 +670,15 @@ class _WorkspaceState extends State<_Workspace> {
         c.currentProject == null) {
       return _Empty(
         icon: Icons.folder_open_rounded,
-        title: '先创建一个项目',
-        detail: '把相关文案放在一起，管理它们的多语言版本。',
+        title: _t('先创建一个项目', 'Create a project first'),
+        detail: _t(
+          '把相关文案放在一起，管理它们的多语言版本。',
+          'Keep related text and its translations together.',
+        ),
         action: FilledButton.icon(
           onPressed: _newProject,
           icon: const Icon(Icons.add),
-          label: const Text('新建项目'),
+          label: Text(_t('新建项目', 'New project')),
         ),
       );
     }
@@ -570,21 +714,36 @@ class _WorkspaceState extends State<_Workspace> {
       children: [
         _PageHeading(
           eyebrow: 'YOUR WORDS, WORLDWIDE',
-          title: '我的项目',
-          subtitle: '在这里，管理每一句表达的多语言旅程。',
+          title: _t('我的项目', 'My projects'),
+          subtitle: _t(
+            '在这里，管理每一句表达的多语言旅程。',
+            'Manage every source string and its translations here.',
+          ),
           action: FilledButton.icon(
             onPressed: _newProject,
             icon: const Icon(Icons.add, size: 18),
-            label: const Text('新建项目'),
+            label: Text(_t('新建项目', 'New project')),
           ),
         ),
         const SizedBox(height: 25),
         _hero(),
         const SizedBox(height: 23),
         _stats([
-          _Stat('项目总数', '${c.projects.length}', Icons.folder_outlined),
-          _Stat('中文文案', '$totalEntries', Icons.notes_rounded),
-          _Stat('覆盖语言', '$totalLanguages', Icons.public_rounded),
+          _Stat(
+            _t('项目总数', 'Projects'),
+            '${c.projects.length}',
+            Icons.folder_outlined,
+          ),
+          _Stat(
+            _t('源文案', 'Source strings'),
+            '$totalEntries',
+            Icons.notes_rounded,
+          ),
+          _Stat(
+            _t('覆盖语言', 'Languages'),
+            '$totalLanguages',
+            Icons.public_rounded,
+          ),
         ]),
         const SizedBox(height: 30),
         Wrap(
@@ -593,17 +752,17 @@ class _WorkspaceState extends State<_Workspace> {
           spacing: 20,
           runSpacing: 14,
           children: [
-            const Text(
-              '全部项目',
-              style: TextStyle(fontWeight: FontWeight.w600, fontSize: 17),
+            Text(
+              _t('全部项目', 'All projects'),
+              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 17),
             ),
             SizedBox(
               width: 270,
               child: TextField(
                 onChanged: (value) => setState(() => _search = value),
-                decoration: const InputDecoration(
-                  hintText: '搜索项目名称',
-                  prefixIcon: Icon(Icons.search, size: 20),
+                decoration: InputDecoration(
+                  hintText: _t('搜索项目名称', 'Search projects'),
+                  prefixIcon: const Icon(Icons.search, size: 20),
                   isDense: true,
                 ),
               ),
@@ -615,15 +774,20 @@ class _WorkspaceState extends State<_Workspace> {
           _Panel(
             child: _Empty(
               icon: Icons.folder_open_outlined,
-              title: _search.isEmpty ? '你的第一个多语言项目' : '没有找到匹配的项目',
+              title: _search.isEmpty
+                  ? _t('你的第一个多语言项目', 'Your first localization project')
+                  : _t('没有找到匹配的项目', 'No matching projects'),
               detail: _search.isEmpty
-                  ? '创建项目，输入中文或导入文档，生成可以直接使用的语言包。'
-                  : '试试其他关键词。',
+                  ? _t(
+                      '创建项目，输入原文或导入文档，生成可以直接使用的语言包。',
+                      'Create a project, enter English text or import a document, and build language packs.',
+                    )
+                  : _t('试试其他关键词。', 'Try another search.'),
               action: _search.isEmpty
                   ? OutlinedButton.icon(
                       onPressed: _newProject,
                       icon: const Icon(Icons.add),
-                      label: const Text('创建项目'),
+                      label: Text(_t('创建项目', 'Create project')),
                     )
                   : null,
             ),
@@ -652,9 +816,12 @@ class _WorkspaceState extends State<_Workspace> {
             },
           ),
         const SizedBox(height: 30),
-        const Text(
-          '从中文到语言包，只需四步',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+        Text(
+          _t(
+            '从原文到语言包，只需四步',
+            'From source text to language packs in four steps',
+          ),
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
         ),
         const SizedBox(height: 16),
         _Panel(
@@ -662,12 +829,28 @@ class _WorkspaceState extends State<_Workspace> {
             spacing: 28,
             runSpacing: 22,
             children: [
-              for (final item in [
-                ('01', '输入中文', '粘贴文本或本地解析文档'),
-                ('02', '选择语言', '一次多选，按需生成译文'),
-                ('03', '校对确认', '逐条检查，保留人工修改'),
-                ('04', '导出语言包', '独立 JSON 或完整 ZIP'),
-              ])
+              for (final item
+                  in _en
+                      ? [
+                          (
+                            '01',
+                            'Enter text',
+                            'Paste text or import a document',
+                          ),
+                          (
+                            '02',
+                            'Choose languages',
+                            'Translate to several languages',
+                          ),
+                          ('03', 'Review', 'Check and edit each translation'),
+                          ('04', 'Export', 'Save JSON files or a ZIP'),
+                        ]
+                      : [
+                          ('01', '输入原文', '粘贴文本或本地解析文档'),
+                          ('02', '选择语言', '一次多选，按需生成译文'),
+                          ('03', '校对确认', '逐条检查，保留人工修改'),
+                          ('04', '导出语言包', '独立 JSON 或完整 ZIP'),
+                        ])
                 SizedBox(
                   width: 225,
                   child: Row(
@@ -716,9 +899,12 @@ class _WorkspaceState extends State<_Workspace> {
           ),
         ),
         const SizedBox(height: 20),
-        const Text(
-          '文档在本地解析 · 译文可追溯来源 · 标准 UTF-8 JSON',
-          style: TextStyle(fontSize: 11, color: _muted),
+        Text(
+          _t(
+            '文档在本地解析 · 译文可追溯来源 · 标准 UTF-8 JSON',
+            'Documents parsed locally · Traceable translations · UTF-8 JSON',
+          ),
+          style: const TextStyle(fontSize: 11, color: _muted),
         ),
       ],
     );
@@ -750,7 +936,7 @@ class _WorkspaceState extends State<_Workspace> {
                 ),
                 const SizedBox(height: 13),
                 Text(
-                  '你的表达，\n不止一种语言。',
+                  _t('你的表达，\n不止一种语言。', 'Your words,\nin every language.'),
                   style: TextStyle(
                     fontSize: constraints.maxWidth < 600 ? 29 : 36,
                     height: 1.4,
@@ -760,9 +946,12 @@ class _WorkspaceState extends State<_Workspace> {
                   ),
                 ),
                 const SizedBox(height: 12),
-                const Text(
-                  '从中文文案到多语言交付，让每一句话都被世界读懂。',
-                  style: TextStyle(
+                Text(
+                  _t(
+                    '从原文到多语言交付，让每一句话都被世界读懂。',
+                    'Turn your source text into language packs for your audience.',
+                  ),
+                  style: const TextStyle(
                     fontSize: 12,
                     color: Color(0xFF708D75),
                     height: 1.8,
@@ -776,12 +965,12 @@ class _WorkspaceState extends State<_Workspace> {
                     FilledButton.icon(
                       onPressed: () => _beginInput(false),
                       icon: const Icon(Icons.edit_note_rounded, size: 18),
-                      label: const Text('输入文案'),
+                      label: Text(_t('输入文案', 'Enter text')),
                     ),
                     OutlinedButton.icon(
                       onPressed: () => _beginInput(true),
                       icon: const Icon(Icons.upload_file_outlined, size: 18),
-                      label: const Text('导入文档'),
+                      label: Text(_t('导入文档', 'Import document')),
                     ),
                   ],
                 ),
@@ -955,17 +1144,22 @@ class _WorkspaceState extends State<_Workspace> {
                   ),
                   const Spacer(),
                   _Tag(
-                    p.totalCount > 0 && ratio == 1 ? '译文齐全' : '进行中',
+                    p.totalCount > 0 && ratio == 1
+                        ? _t('译文齐全', 'Complete')
+                        : _t('进行中', 'In progress'),
                     warm: ratio < 1,
                   ),
                   PopupMenuButton<String>(
-                    tooltip: '项目操作',
+                    tooltip: _t('项目操作', 'Project actions'),
                     iconSize: 19,
                     onSelected: (value) {
                       if (value == 'delete') _deleteProject(p);
                     },
                     itemBuilder: (_) => [
-                      const PopupMenuItem(value: 'delete', child: Text('删除项目')),
+                      PopupMenuItem(
+                        value: 'delete',
+                        child: Text(_t('删除项目', 'Delete project')),
+                      ),
                     ],
                   ),
                 ],
@@ -982,7 +1176,12 @@ class _WorkspaceState extends State<_Workspace> {
               ),
               const SizedBox(height: 8),
               Text(
-                p.description.isEmpty ? '为每一句中文，准备一个多语言版本。' : p.description,
+                p.description.isEmpty
+                    ? _t(
+                        '为每一句原文，准备一个多语言版本。',
+                        'Translate each source string into more languages.',
+                      )
+                    : p.description,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
@@ -996,7 +1195,13 @@ class _WorkspaceState extends State<_Workspace> {
                 spacing: 6,
                 runSpacing: 6,
                 children: p.locales
-                    .map((locale) => _Tag(languageName(locale)))
+                    .map(
+                      (locale) => _Tag(
+                        _en
+                            ? _localeLabel(locale, sourceLocale: p.sourceLocale)
+                            : languageName(locale),
+                      ),
+                    )
                     .toList(),
               ),
               const SizedBox(height: 20),
@@ -1014,7 +1219,10 @@ class _WorkspaceState extends State<_Workspace> {
                   const Icon(Icons.short_text, size: 15, color: _muted),
                   const SizedBox(width: 5),
                   Text(
-                    '${p.entries.length} 条文案',
+                    _t(
+                      '${p.entries.length} 条文案',
+                      '${p.entries.length} strings',
+                    ),
                     style: const TextStyle(fontSize: 11, color: _muted),
                   ),
                   const Spacer(),
@@ -1035,59 +1243,104 @@ class _WorkspaceState extends State<_Workspace> {
     final name = TextEditingController();
     final description = TextEditingController();
     final form = GlobalKey<FormState>();
+    var sourceLocale = _en ? 'en' : 'zh-Hans';
     final result = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        scrollable: true,
-        title: const Text('创建一个新项目'),
-        content: SizedBox(
-          width: 390,
-          child: Form(
-            key: form,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextFormField(
-                  controller: name,
-                  autofocus: true,
-                  maxLength: 60,
-                  decoration: const InputDecoration(
-                    labelText: '项目名称',
-                    hintText: '例如：产品网站',
+      builder: (context) => StatefulBuilder(
+        builder: (context, updateDialog) => AlertDialog(
+          scrollable: true,
+          title: Text(_t('创建一个新项目', 'Create a new project')),
+          content: SizedBox(
+            width: 390,
+            child: Form(
+              key: form,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextFormField(
+                    controller: name,
+                    autofocus: true,
+                    maxLength: 60,
+                    decoration: InputDecoration(
+                      labelText: _t('项目名称', 'Project name'),
+                      hintText: _t('例如：产品网站', 'For example: Product website'),
+                    ),
+                    validator: (value) => value == null || value.trim().isEmpty
+                        ? _t('请填写项目名称', 'Enter a project name')
+                        : null,
                   ),
-                  validator: (value) =>
-                      value == null || value.trim().isEmpty ? '请填写项目名称' : null,
-                ),
-                const SizedBox(height: 13),
-                TextField(
-                  controller: description,
-                  maxLength: 180,
-                  maxLines: 3,
-                  decoration: const InputDecoration(
-                    labelText: '项目说明（选填）',
-                    hintText: '这个项目的文案用于什么地方？',
+                  const SizedBox(height: 13),
+                  TextField(
+                    controller: description,
+                    maxLength: 180,
+                    maxLines: 3,
+                    decoration: InputDecoration(
+                      labelText: _t('项目说明（选填）', 'Description (optional)'),
+                      hintText: _t(
+                        '这个项目的文案用于什么地方？',
+                        'Where will these strings be used?',
+                      ),
+                    ),
                   ),
-                ),
-              ],
+                  const SizedBox(height: 12),
+                  Text(
+                    _t('原文语言', 'Source language'),
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  SegmentedButton<String>(
+                    key: const ValueKey('new-project-source-locale'),
+                    showSelectedIcon: false,
+                    segments: [
+                      ButtonSegment(
+                        value: 'zh-Hans',
+                        label: Text(_t('中文', 'Chinese')),
+                      ),
+                      ButtonSegment(
+                        value: 'en',
+                        label: Text(_t('英文', 'English')),
+                      ),
+                    ],
+                    selected: {sourceLocale},
+                    onSelectionChanged: (values) =>
+                        updateDialog(() => sourceLocale = values.first),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    _t(
+                      '创建后原文语言不能更改。',
+                      'The source language is fixed after project creation.',
+                    ),
+                    style: const TextStyle(fontSize: 11, color: _muted),
+                  ),
+                ],
+              ),
             ),
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(_t('取消', 'Cancel')),
+            ),
+            FilledButton(
+              onPressed: () {
+                if (form.currentState!.validate()) Navigator.pop(context, true);
+              },
+              child: Text(_t('创建项目', 'Create project')),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () {
-              if (form.currentState!.validate()) Navigator.pop(context, true);
-            },
-            child: const Text('创建项目'),
-          ),
-        ],
       ),
     );
     if (result == true && mounted) {
-      c.createProject(name.text.trim(), description: description.text.trim());
+      c.createProject(
+        name.text.trim(),
+        description: description.text.trim(),
+        sourceLocale: sourceLocale,
+      );
       _go(_View.project);
     }
     Future<void>.delayed(const Duration(milliseconds: 300), () {
@@ -1099,22 +1352,32 @@ class _WorkspaceState extends State<_Workspace> {
 
   Future<void> _deleteProject(Project project) async {
     if (c.running) {
-      _notify('请先暂停翻译任务，再删除项目。');
+      _notify(
+        _t(
+          '请先暂停翻译任务，再删除项目。',
+          'Pause translation before deleting this project.',
+        ),
+      );
       return;
     }
     final yes = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('删除这个项目？'),
-        content: Text('“${project.name}”的文案、译文和本地导出记录将被删除。已保存到设备的文件不受影响。'),
+        title: Text(_t('删除这个项目？', 'Delete this project?')),
+        content: Text(
+          _t(
+            '“${project.name}”的文案、译文和本地导出记录将被删除。已保存到设备的文件不受影响。',
+            'The strings, translations, and local export history for “${project.name}” will be deleted. Saved files stay on your device.',
+          ),
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('取消'),
+            child: Text(_t('取消', 'Cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('删除项目'),
+            child: Text(_t('删除项目', 'Delete project')),
           ),
         ],
       ),
@@ -1128,12 +1391,19 @@ class _WorkspaceState extends State<_Workspace> {
   Future<void> _beginInput(bool document) async {
     _importGeneration++;
     _importing = false;
-    if (c.currentProject == null) {
-      if (c.projects.isNotEmpty) {
-        c.openProject(c.projects.first.id);
+    final quickStart = _view == _View.home || _view == _View.tasks;
+    if (quickStart) {
+      final preferredSource = _en ? 'en' : 'zh-Hans';
+      final matching = c.projects
+          .where((project) => project.sourceLocale == preferredSource)
+          .firstOrNull;
+      if (matching != null) {
+        c.openProject(matching.id);
       } else if (!await _newProject()) {
         return;
       }
+    } else if (c.currentProject == null) {
+      if (!await _newProject()) return;
     }
     if (!mounted) return;
     c.applyRecentLocales();
@@ -1155,21 +1425,40 @@ class _WorkspaceState extends State<_Workspace> {
           eyebrow: 'PROJECT / LOCALIZATION',
           title: p.name,
           subtitle: p.description.isEmpty
-              ? '你的中文文案与多语言版本，都在这里。'
+              ? _t(
+                  '你的原文与多语言版本，都在这里。',
+                  'Your source text and translations live here.',
+                )
               : p.description,
           back: () => _go(_View.home),
           action: FilledButton.icon(
             onPressed: () => _beginInput(false),
             icon: const Icon(Icons.add, size: 18),
-            label: const Text('新增文案'),
+            label: Text(_t('新增文案', 'Add strings')),
           ),
+        ),
+        const SizedBox(height: 12),
+        _Tag(
+          _t(
+            '源语言：${p.sourceLocale == 'en' ? '英文' : '简体中文'}（${p.sourceLocale}）',
+            'Source: ${p.sourceLocale == 'en' ? 'English' : 'Simplified Chinese'} (${p.sourceLocale})',
+          ),
+          icon: Icons.language,
         ),
         const SizedBox(height: 24),
         _stats([
-          _Stat('中文文案', '${p.entries.length}', Icons.notes_rounded),
-          _Stat('目标语言', '${p.locales.length}', Icons.public_rounded),
           _Stat(
-            '译文齐全度',
+            _t('${_sourceName(p)}文案', 'Source strings'),
+            '${p.entries.length}',
+            Icons.notes_rounded,
+          ),
+          _Stat(
+            _t('目标语言', 'Target languages'),
+            '${p.locales.length}',
+            Icons.public_rounded,
+          ),
+          _Stat(
+            _t('译文齐全度', 'Translation progress'),
             '${p.totalCount == 0 ? 0 : (100 * p.translatedCount / p.totalCount).round()}%',
             Icons.check_circle_outline,
           ),
@@ -1183,17 +1472,23 @@ class _WorkspaceState extends State<_Workspace> {
             spacing: 20,
             runSpacing: 16,
             children: [
-              const Column(
+              Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    '每一句中文，都能走得更远',
-                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                    _t('每一句原文，都能走得更远', 'Take every source string further'),
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
-                  SizedBox(height: 7),
+                  const SizedBox(height: 7),
                   Text(
-                    '补齐缺失译文，保护人工修改和已经确认的内容。',
-                    style: TextStyle(fontSize: 12, color: _muted),
+                    _t(
+                      '补齐缺失译文，保护人工修改和已经确认的内容。',
+                      'Fill in missing translations while keeping edits and reviewed work.',
+                    ),
+                    style: const TextStyle(fontSize: 12, color: _muted),
                   ),
                 ],
               ),
@@ -1206,7 +1501,7 @@ class _WorkspaceState extends State<_Workspace> {
                         _go(_View.languages);
                       },
                 icon: const Icon(Icons.translate, size: 18),
-                label: const Text('翻译未完成项'),
+                label: Text(_t('翻译未完成项', 'Translate missing items')),
               ),
             ],
           ),
@@ -1219,7 +1514,10 @@ class _WorkspaceState extends State<_Workspace> {
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             Text(
-              '项目文案 · ${p.entries.length}',
+              _t(
+                '项目文案 · ${p.entries.length}',
+                'Project strings · ${p.entries.length}',
+              ),
               style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
             ),
             Wrap(
@@ -1229,7 +1527,7 @@ class _WorkspaceState extends State<_Workspace> {
                 TextButton.icon(
                   onPressed: () => _beginInput(true),
                   icon: const Icon(Icons.upload_file, size: 18),
-                  label: const Text('导入文档'),
+                  label: Text(_t('导入文档', 'Import document')),
                 ),
                 TextButton.icon(
                   onPressed: p.selectedEntries.isEmpty
@@ -1239,14 +1537,14 @@ class _WorkspaceState extends State<_Workspace> {
                           _go(_View.review);
                         },
                   icon: const Icon(Icons.fact_check_outlined, size: 18),
-                  label: const Text('校对'),
+                  label: Text(_t('校对', 'Review')),
                 ),
                 OutlinedButton.icon(
                   onPressed: p.selectedEntries.isEmpty
                       ? null
                       : () => _go(_View.export),
                   icon: const Icon(Icons.file_download_outlined, size: 18),
-                  label: const Text('导出语言包'),
+                  label: Text(_t('导出语言包', 'Export language packs')),
                 ),
               ],
             ),
@@ -1257,11 +1555,19 @@ class _WorkspaceState extends State<_Workspace> {
           _Panel(
             child: _Empty(
               icon: Icons.edit_note_rounded,
-              title: '第一条文案，从这里开始',
-              detail: '输入中文或导入文档，生成你的第一组语言包。',
+              title: _t('第一条文案，从这里开始', 'Start with your first string'),
+              detail: p.sourceLocale == 'en'
+                  ? _t(
+                      '输入英文或导入英文文档，生成你的第一组语言包。',
+                      'Enter English text or import an English document to create language packs.',
+                    )
+                  : _t(
+                      '输入中文或导入中文文档，生成你的第一组语言包。',
+                      'Enter Chinese text or import a Chinese document to create language packs.',
+                    ),
               action: FilledButton(
                 onPressed: () => _beginInput(false),
-                child: const Text('添加文案'),
+                child: Text(_t('添加文案', 'Add strings')),
               ),
             ),
           )
@@ -1290,7 +1596,10 @@ class _WorkspaceState extends State<_Workspace> {
                       const SizedBox(width: 4),
                       Expanded(
                         child: Text(
-                          '已选择 ${p.selectedEntries.length} 条用于翻译和导出',
+                          _t(
+                            '已选择 ${p.selectedEntries.length} 条用于翻译和导出',
+                            '${p.selectedEntries.length} selected for translation and export',
+                          ),
                           style: const TextStyle(fontSize: 12, color: _muted),
                         ),
                       ),
@@ -1305,8 +1614,11 @@ class _WorkspaceState extends State<_Workspace> {
             ),
           ),
         const SizedBox(height: 20),
-        const _Notice(
-          '项目数据保存在当前设备或浏览器。导出语言包后可交付使用；各端数据暂不自动同步。',
+        _Notice(
+          _t(
+            '项目数据保存在当前设备或浏览器。导出语言包后可交付使用；各端数据暂不自动同步。',
+            'Project data is saved on this device or browser. Export language packs to share them. Data does not sync across devices.',
+          ),
           icon: Icons.devices_outlined,
         ),
       ],
@@ -1362,7 +1674,7 @@ class _WorkspaceState extends State<_Workspace> {
                   children: p.locales
                       .map(
                         (locale) => _Tag(
-                          languageName(locale),
+                          _localeLabel(locale),
                           warm:
                               entry.translations[locale]?.text
                                   .trim()
@@ -1383,7 +1695,7 @@ class _WorkspaceState extends State<_Workspace> {
                 style: const TextStyle(fontSize: 11, color: _muted),
               ),
               IconButton(
-                tooltip: '校对这条文案',
+                tooltip: _t('校对这条文案', 'Review this string'),
                 onPressed: () {
                   if (!entry.selected) c.selectEntry(entry, true);
                   _reviewIndex = _entries.indexWhere((e) => e.id == entry.id);
@@ -1394,7 +1706,7 @@ class _WorkspaceState extends State<_Workspace> {
             ],
           ),
           PopupMenuButton<String>(
-            tooltip: '文案操作',
+            tooltip: _t('文案操作', 'String actions'),
             onSelected: (action) {
               if (action == 'edit') {
                 _editEntrySource(entry);
@@ -1403,11 +1715,14 @@ class _WorkspaceState extends State<_Workspace> {
               }
             },
             itemBuilder: (_) => [
-              const PopupMenuItem(value: 'edit', child: Text('编辑原文')),
+              PopupMenuItem(
+                value: 'edit',
+                child: Text(_t('编辑原文', 'Edit source')),
+              ),
               PopupMenuItem(
                 value: 'delete',
                 enabled: !c.running,
-                child: const Text('删除文案'),
+                child: Text(_t('删除文案', 'Delete string')),
               ),
             ],
           ),
@@ -1463,7 +1778,14 @@ class _WorkspaceState extends State<_Workspace> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      ['添加内容', '选择语言', '翻译校对', '导出语言包'][step],
+                      (_en
+                          ? [
+                              'Add content',
+                              'Choose languages',
+                              'Review',
+                              'Export',
+                            ]
+                          : ['添加内容', '选择语言', '翻译校对', '导出语言包'])[step],
                       style: TextStyle(
                         fontSize: 11,
                         color: step <= index ? _green : _muted,
@@ -1482,13 +1804,21 @@ class _WorkspaceState extends State<_Workspace> {
   Widget _inputPage() {
     final document = _view == _View.document;
     final blocks = _blocks;
+    final project = c.currentProject!;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _workflow(
           0,
-          document ? '从文档开始，一次翻译全文' : '添加你的中文文案',
-          '每一段表达，都值得被更多人读懂。',
+          document
+              ? _t('从文档开始，一次翻译全文', 'Import a document to translate')
+              : project.sourceLocale == 'en'
+              ? _t('添加你的英文文案', 'Add your English text')
+              : _t('添加你的中文文案', 'Add your Chinese text'),
+          _t(
+            '每一段表达，都值得被更多人读懂。',
+            'Make every message understandable in more languages.',
+          ),
         ),
         _columns(
           _Panel(
@@ -1499,13 +1829,13 @@ class _WorkspaceState extends State<_Workspace> {
                   spacing: 8,
                   children: [
                     ChoiceChip(
-                      label: const Text('文本输入'),
+                      label: Text(_t('文本输入', 'Text input')),
                       avatar: const Icon(Icons.edit_note, size: 18),
                       selected: !document,
                       onSelected: (_) => _go(_View.input),
                     ),
                     ChoiceChip(
-                      label: const Text('文档导入'),
+                      label: Text(_t('文档导入', 'Import document')),
                       avatar: const Icon(Icons.upload_file, size: 18),
                       selected: document,
                       onSelected: (_) => _go(_View.document),
@@ -1516,9 +1846,15 @@ class _WorkspaceState extends State<_Workspace> {
                 if (document)
                   _documentPicker()
                 else ...[
-                  const Text(
-                    '中文原文',
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                  Text(
+                    _t(
+                      '${_sourceName(project)}原文',
+                      '${_sourceName(project)} source text',
+                    ),
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                   const SizedBox(height: 11),
                   TextField(
@@ -1527,7 +1863,15 @@ class _WorkspaceState extends State<_Workspace> {
                     maxLines: 18,
                     onChanged: _parseText,
                     decoration: InputDecoration(
-                      hintText: '在这里输入中文文案，例如：\n\n登录\n欢迎使用我们的产品\n你好，{name}',
+                      hintText: project.sourceLocale == 'en'
+                          ? _t(
+                              '在这里输入英文文案，例如：\n\nSign in\nWelcome to our product\nHello, {name}',
+                              'Enter English text here, for example:\n\nSign in\nWelcome to our product\nHello, {name}',
+                            )
+                          : _t(
+                              '在这里输入中文文案，例如：\n\n登录\n欢迎使用我们的产品\n你好，{name}',
+                              'Enter Chinese text here, for example:\n\n登录\n欢迎使用我们的产品\n你好，{name}',
+                            ),
                       alignLabelWithHint: true,
                       errorText: _inputError,
                       errorMaxLines: 3,
@@ -1539,12 +1883,12 @@ class _WorkspaceState extends State<_Workspace> {
                     runSpacing: 6,
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      const Text(
-                        '拆分方式',
-                        style: TextStyle(fontSize: 12, color: _muted),
+                      Text(
+                        _t('拆分方式', 'Split by'),
+                        style: const TextStyle(fontSize: 12, color: _muted),
                       ),
                       ChoiceChip(
-                        label: const Text('按行'),
+                        label: Text(_t('按行', 'Line')),
                         selected: _split == 'line',
                         onSelected: (_) {
                           _split = 'line';
@@ -1552,7 +1896,7 @@ class _WorkspaceState extends State<_Workspace> {
                         },
                       ),
                       ChoiceChip(
-                        label: const Text('按空行段落'),
+                        label: Text(_t('按空行段落', 'Paragraph')),
                         selected: _split == 'paragraph',
                         onSelected: (_) {
                           _split = 'paragraph';
@@ -1566,15 +1910,21 @@ class _WorkspaceState extends State<_Workspace> {
                 TextField(
                   controller: _prefix,
                   maxLength: 24,
-                  decoration: const InputDecoration(
-                    labelText: 'Key 前缀（选填）',
-                    hintText: '例如 auth → auth_login',
-                    helperText: '常见文案自动语义命名，自定义文案可在校对时修改。',
+                  decoration: InputDecoration(
+                    labelText: _t('Key 前缀（选填）', 'Key prefix (optional)'),
+                    hintText: 'auth → auth_login',
+                    helperText: _t(
+                      '常见文案自动语义命名，自定义文案可在校对时修改。',
+                      'Common strings get suggested keys. You can edit keys during review.',
+                    ),
                   ),
                 ),
                 const SizedBox(height: 15),
-                const _Notice(
-                  '文档文件在本地解析。只有点击开始翻译后，选中的原文才会发送给翻译服务。',
+                _Notice(
+                  _t(
+                    '文档文件在本地解析。只有点击开始翻译后，选中的原文才会发送给翻译服务。',
+                    'Documents are parsed on your device. Selected source text is sent to translation services only after you start translation.',
+                  ),
                   icon: Icons.privacy_tip_outlined,
                 ),
               ],
@@ -1586,41 +1936,54 @@ class _WorkspaceState extends State<_Workspace> {
               children: [
                 Row(
                   children: [
-                    const Expanded(
+                    Expanded(
                       child: Text(
-                        '内容预览',
-                        style: TextStyle(
+                        _t('内容预览', 'Content preview'),
+                        style: const TextStyle(
                           fontSize: 17,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
                     ),
                     _Tag(
-                      '${blocks.where((b) => b.selected).length} / ${blocks.length} 段',
+                      _t(
+                        '${blocks.where((b) => b.selected).length} / ${blocks.length} 段',
+                        '${blocks.where((b) => b.selected).length} / ${blocks.length} blocks',
+                      ),
                     ),
                   ],
                 ),
                 const SizedBox(height: 8),
-                const Text(
-                  '勾选需要翻译的段落，点击内容可编辑。',
-                  style: TextStyle(fontSize: 12, height: 1.7, color: _muted),
+                Text(
+                  _t(
+                    '勾选需要翻译的段落，点击内容可编辑。',
+                    'Select the blocks to translate. Tap a block to edit it.',
+                  ),
+                  style: const TextStyle(
+                    fontSize: 12,
+                    height: 1.7,
+                    color: _muted,
+                  ),
                 ),
                 const SizedBox(height: 15),
                 if (blocks.isEmpty)
-                  const Padding(
+                  Padding(
                     padding: EdgeInsets.symmetric(vertical: 60),
                     child: Center(
                       child: Column(
                         children: [
-                          Icon(
+                          const Icon(
                             Icons.subject_rounded,
                             size: 37,
                             color: Color(0xFFB0C3AE),
                           ),
-                          SizedBox(height: 15),
+                          const SizedBox(height: 15),
                           Text(
-                            '添加内容后，段落会出现在这里',
-                            style: TextStyle(fontSize: 12, color: _muted),
+                            _t(
+                              '添加内容后，段落会出现在这里',
+                              'Your content will appear here',
+                            ),
+                            style: const TextStyle(fontSize: 12, color: _muted),
                           ),
                         ],
                       ),
@@ -1638,7 +2001,9 @@ class _WorkspaceState extends State<_Workspace> {
                           }
                         }),
                         child: Text(
-                          blocks.every((b) => b.selected) ? '取消全选' : '全选',
+                          blocks.every((b) => b.selected)
+                              ? _t('取消全选', 'Deselect all')
+                              : _t('全选', 'Select all'),
                         ),
                       ),
                       TextButton.icon(
@@ -1646,14 +2011,14 @@ class _WorkspaceState extends State<_Workspace> {
                             ? null
                             : _mergeBlocks,
                         icon: const Icon(Icons.merge_type, size: 17),
-                        label: const Text('合并所选'),
+                        label: Text(_t('合并所选', 'Merge selected')),
                       ),
                       TextButton.icon(
                         onPressed: blocks.any((b) => b.selected)
                             ? _splitBlocks
                             : null,
                         icon: const Icon(Icons.call_split, size: 17),
-                        label: const Text('按句拆分'),
+                        label: Text(_t('按句拆分', 'Split sentences')),
                       ),
                     ],
                   ),
@@ -1676,7 +2041,7 @@ class _WorkspaceState extends State<_Workspace> {
           TextButton.icon(
             onPressed: () => _go(_View.project),
             icon: const Icon(Icons.arrow_back, size: 18),
-            label: const Text('返回项目'),
+            label: Text(_t('返回项目', 'Back to project')),
           ),
           FilledButton.icon(
             onPressed:
@@ -1684,7 +2049,7 @@ class _WorkspaceState extends State<_Workspace> {
                 ? null
                 : _commitBlocks,
             icon: const Icon(Icons.arrow_forward, size: 18),
-            label: const Text('下一步：选择语言'),
+            label: Text(_t('下一步：选择语言', 'Next: choose languages')),
           ),
         ),
       ],
@@ -1721,15 +2086,18 @@ class _WorkspaceState extends State<_Workspace> {
           children: [
             const Icon(Icons.upload_file_outlined, size: 43, color: _green),
             const SizedBox(height: 15),
-            const Text(
-              '选择需要翻译的文档',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            Text(
+              _t('选择需要翻译的文档', 'Choose a document to translate'),
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 9),
-            const Text(
-              'TXT · Markdown · DOCX\n最大 10 MB，最多 1,000 个内容块',
+            Text(
+              _t(
+                'TXT · Markdown · DOCX\n最大 10 MB，最多 1,000 个内容块',
+                'TXT · Markdown · DOCX\nUp to 10 MB and 1,000 content blocks',
+              ),
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 12, color: _muted, height: 1.9),
+              style: const TextStyle(fontSize: 12, color: _muted, height: 1.9),
             ),
             const SizedBox(height: 20),
             FilledButton.icon(
@@ -1765,15 +2133,22 @@ class _WorkspaceState extends State<_Workspace> {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Icon(Icons.folder_open_outlined, size: 18),
-              label: Text(_importing ? '正在解析…' : '选择文件'),
+              label: Text(
+                _importing
+                    ? _t('正在解析…', 'Parsing…')
+                    : _t('选择文件', 'Choose file'),
+              ),
             ),
           ],
         ),
       ),
       const SizedBox(height: 13),
-      const Text(
-        'Word 正文和表格会按内容块提取。暂不支持 PDF、图片扫描件和旧版 DOC，复杂排版不还原。',
-        style: TextStyle(fontSize: 11, height: 1.8, color: _muted),
+      Text(
+        _t(
+          'Word 正文和表格会按内容块提取。暂不支持 PDF、图片扫描件和旧版 DOC，复杂排版不还原。',
+          'Word paragraphs and tables are extracted as blocks. PDF, scanned images, and old DOC files are not supported.',
+        ),
+        style: const TextStyle(fontSize: 11, height: 1.8, color: _muted),
       ),
     ],
   );
@@ -1823,7 +2198,7 @@ class _WorkspaceState extends State<_Workspace> {
         ),
         IconButton(
           onPressed: () => _editBlock(block),
-          tooltip: '编辑段落',
+          tooltip: _t('编辑段落', 'Edit block'),
           icon: const Icon(Icons.edit_outlined, size: 17, color: _muted),
         ),
       ],
@@ -1831,7 +2206,11 @@ class _WorkspaceState extends State<_Workspace> {
   );
 
   Future<void> _editBlock(DocumentBlock block) async {
-    final text = await _textDialog('编辑段落', block.text, lines: 8);
+    final text = await _textDialog(
+      _t('编辑段落', 'Edit block'),
+      block.text,
+      lines: 8,
+    );
     if (text != null && text.trim().isNotEmpty && mounted) {
       setState(() => block.text = text.trim());
     }
@@ -1893,11 +2272,12 @@ class _WorkspaceState extends State<_Workspace> {
     final p = c.currentProject!;
     final plan = c.incrementalPlan();
     final selectedLocales = c.batchLocales;
+    final availableLanguages = targetLanguagesFor(p.sourceLocale);
     final query = _languageSearch.trim().toLowerCase();
-    final visibleLanguages = supportedLanguages
+    final visibleLanguages = availableLanguages
         .where(
           (language) =>
-              '${language.code} ${language.name} ${language.nativeName}'
+              '${language.code} ${language.name} ${language.nativeName} ${_englishLanguageNames[language.code] ?? ''}'
                   .toLowerCase()
                   .contains(query),
         )
@@ -1905,7 +2285,14 @@ class _WorkspaceState extends State<_Workspace> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _workflow(1, '为你的内容，选择目的地', '一次选择多种语言，每种语言使用相同的 Key。'),
+        _workflow(
+          1,
+          _t('为你的内容，选择目的地', 'Choose target languages'),
+          _t(
+            '一次选择多种语言，每种语言使用相同的 Key。',
+            'Choose several languages. Every pack will use the same keys.',
+          ),
+        ),
         _columns(
           _Panel(
             child: Column(
@@ -1913,10 +2300,10 @@ class _WorkspaceState extends State<_Workspace> {
               children: [
                 Row(
                   children: [
-                    const Expanded(
+                    Expanded(
                       child: Text(
-                        '目标语言',
-                        style: TextStyle(
+                        _t('目标语言', 'Target languages'),
+                        style: const TextStyle(
                           fontSize: 17,
                           fontWeight: FontWeight.w600,
                         ),
@@ -1927,39 +2314,49 @@ class _WorkspaceState extends State<_Workspace> {
                           ? null
                           : () => c.setBatchLocales(
                               selectedLocales.length ==
-                                      supportedLanguages.length
+                                      availableLanguages.length
                                   ? []
-                                  : supportedLanguages
+                                  : availableLanguages
                                         .map((l) => l.code)
                                         .toList(),
                             ),
                       child: Text(
-                        selectedLocales.length == supportedLanguages.length
-                            ? '取消全选'
-                            : '选择全部',
+                        selectedLocales.length == availableLanguages.length
+                            ? _t('取消全选', 'Deselect all')
+                            : _t('选择全部', 'Select all'),
                       ),
                     ),
                   ],
                 ),
                 const SizedBox(height: 17),
-                const _Notice(
-                  '简体中文 · 源语言，导出时可包含 zh-Hans.json。另有 34 种目标语言可选。',
+                _Notice(
+                  _t(
+                    '${_sourceName(p)} · 源语言，导出时可包含 ${p.sourceLocale}.json。另有 ${availableLanguages.length} 种目标语言可选。',
+                    '${_sourceName(p)} is the source language. You can include ${p.sourceLocale}.json when exporting. ${availableLanguages.length} target languages are available.',
+                  ),
                   icon: Icons.language,
                 ),
                 const SizedBox(height: 8),
-                const Text(
-                  'MyMemory 不支持巴西葡萄牙语、菲律宾语和书面挪威语，请为这些语言启用支持它们的平台。',
-                  style: TextStyle(fontSize: 11, color: _muted, height: 1.6),
+                Text(
+                  _t(
+                    'MyMemory 不支持巴西葡萄牙语、菲律宾语和书面挪威语，请为这些语言启用支持它们的平台。',
+                    'MyMemory does not support Brazilian Portuguese, Filipino, or Norwegian Bokmål. Enable another provider for those languages.',
+                  ),
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: _muted,
+                    height: 1.6,
+                  ),
                 ),
                 const SizedBox(height: 16),
                 TextFormField(
                   key: const ValueKey('language-search'),
                   initialValue: _languageSearch,
                   onChanged: (value) => setState(() => _languageSearch = value),
-                  decoration: const InputDecoration(
-                    labelText: '搜索目标语言',
-                    hintText: '中文名、原生名称或语言代码',
-                    prefixIcon: Icon(Icons.search),
+                  decoration: InputDecoration(
+                    labelText: _t('搜索目标语言', 'Search target languages'),
+                    hintText: _t('中文名、原生名称或语言代码', 'Name or language code'),
+                    prefixIcon: const Icon(Icons.search),
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -1968,7 +2365,10 @@ class _WorkspaceState extends State<_Workspace> {
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     Text(
-                      '已选 ${selectedLocales.length} / ${supportedLanguages.length} 种',
+                      _t(
+                        '已选 ${selectedLocales.length} / ${availableLanguages.length} 种',
+                        '${selectedLocales.length} / ${availableLanguages.length} selected',
+                      ),
                       style: const TextStyle(fontSize: 12, color: _muted),
                     ),
                     if (query.isNotEmpty && visibleLanguages.isNotEmpty)
@@ -1981,14 +2381,14 @@ class _WorkspaceState extends State<_Workspace> {
                                   (language) => language.code,
                                 ),
                               ]),
-                        child: const Text('选择搜索结果'),
+                        child: Text(_t('选择搜索结果', 'Select results')),
                       ),
                   ],
                 ),
                 if (visibleLanguages.isEmpty)
-                  const Padding(
+                  Padding(
                     padding: EdgeInsets.all(24),
-                    child: Text('没有匹配的目标语言'),
+                    child: Text(_t('没有匹配的目标语言', 'No matching languages')),
                   ),
                 ConstrainedBox(
                   constraints: const BoxConstraints(maxHeight: 480),
@@ -2064,7 +2464,7 @@ class _WorkspaceState extends State<_Workspace> {
                                               CrossAxisAlignment.start,
                                           children: [
                                             Text(
-                                              language.name,
+                                              _languageLabel(language),
                                               style: const TextStyle(
                                                 fontSize: 14,
                                                 fontWeight: FontWeight.w600,
@@ -2108,21 +2508,39 @@ class _WorkspaceState extends State<_Workspace> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  '本次翻译',
-                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
+                Text(
+                  _t('本次翻译', 'This translation'),
+                  style: const TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
                 const SizedBox(height: 22),
-                _summary('中文文案', '${p.selectedEntries.length} 条'),
-                _summary('目标语言', '${selectedLocales.length} 种'),
+                _summary(
+                  _t('源文案', 'Source strings'),
+                  _t(
+                    '${p.selectedEntries.length} 条',
+                    '${p.selectedEntries.length} ${p.selectedEntries.length == 1 ? 'string' : 'strings'}',
+                  ),
+                ),
+                _summary(
+                  _t('目标语言', 'Target languages'),
+                  _t(
+                    '${selectedLocales.length} 种',
+                    '${selectedLocales.length} languages',
+                  ),
+                ),
                 const Divider(height: 30),
-                const Text(
-                  '需要新增翻译',
-                  style: TextStyle(fontSize: 12, color: _muted),
+                Text(
+                  _t('需要新增翻译', 'New translations needed'),
+                  style: const TextStyle(fontSize: 12, color: _muted),
                 ),
                 const SizedBox(height: 10),
                 Text(
-                  '${plan.uniquePending} 组原文与语言',
+                  _t(
+                    '${plan.uniquePending} 组原文与语言',
+                    '${plan.uniquePending} source/language pairs',
+                  ),
                   style: const TextStyle(
                     fontSize: 29,
                     color: _green,
@@ -2130,26 +2548,44 @@ class _WorkspaceState extends State<_Workspace> {
                   ),
                 ),
                 const SizedBox(height: 16),
-                _summary('保留已有结果', '${plan.retained} 条'),
-                _summary('复用项目译文', '${plan.reusable} 条'),
-                _summary('本批重复文案', '${plan.pending - plan.uniquePending} 条'),
+                _summary(
+                  _t('保留已有结果', 'Keep existing results'),
+                  '${plan.retained}',
+                ),
+                _summary(
+                  _t('复用项目译文', 'Reuse project translations'),
+                  '${plan.reusable}',
+                ),
+                _summary(
+                  _t('本批重复文案', 'Repeated strings'),
+                  '${plan.pending - plan.uniquePending}',
+                ),
                 Wrap(
                   spacing: 6,
                   runSpacing: 6,
                   children: selectedLocales
-                      .map((code) => _Tag(languageName(code)))
+                      .map((code) => _Tag(_localeLabel(code)))
                       .toList(),
                 ),
                 const SizedBox(height: 25),
                 _Notice(
-                  '仅新增或变化且没有可复用译文的原文会发送；同批相同内容合并处理。'
-                  '本次${c.settings.providerFallback ? '启用顺序：${c.settings.providerOrder.join(' → ')}；仅额度耗尽或语言不支持时切换。' : '只使用首选平台 ${c.settings.providerOrder.first}，自动备用已关闭。'}',
+                  _t(
+                    '仅新增或变化且没有可复用译文的原文会发送；同批相同内容合并处理。本次${c.settings.providerFallback ? '启用顺序：${c.settings.providerOrder.join(' → ')}；仅额度耗尽或语言不支持时切换。' : '只使用首选平台 ${c.settings.providerOrder.first}，自动备用已关闭。'}',
+                    'Only new or changed source text without reusable translations is sent. Duplicate content is combined. ${c.settings.providerFallback ? 'Provider order: ${c.settings.providerOrder.join(' → ')}.' : 'Only ${c.settings.providerOrder.first} is used; fallback is off.'}',
+                  ),
                   icon: Icons.info_outline,
                 ),
                 const SizedBox(height: 14),
-                const Text(
-                  '长段落自动拆分后合并；人工修改、已确认内容和已有成功结果会受到保护。',
-                  style: TextStyle(fontSize: 11, color: _muted, height: 1.8),
+                Text(
+                  _t(
+                    '长段落自动拆分后合并；人工修改、已确认内容和已有成功结果会受到保护。',
+                    'Long paragraphs are split and rejoined automatically. Edits, reviewed content, and completed translations are preserved.',
+                  ),
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: _muted,
+                    height: 1.8,
+                  ),
                 ),
                 const SizedBox(height: 23),
                 SizedBox(
@@ -2162,7 +2598,7 @@ class _WorkspaceState extends State<_Workspace> {
                         ? null
                         : _startTranslation,
                     icon: const Icon(Icons.translate, size: 18),
-                    label: const Text('开始增量翻译'),
+                    label: Text(_t('开始增量翻译', 'Start translation')),
                   ),
                 ),
               ],
@@ -2173,7 +2609,7 @@ class _WorkspaceState extends State<_Workspace> {
         TextButton.icon(
           onPressed: () => _go(_View.project),
           icon: const Icon(Icons.arrow_back, size: 18),
-          label: const Text('返回项目'),
+          label: Text(_t('返回项目', 'Back to project')),
         ),
       ],
     );
@@ -2207,7 +2643,14 @@ class _WorkspaceState extends State<_Workspace> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _workflow(2, '让每一句话，拥有更多可能', '翻译结果逐条保存，可以随时暂停，再继续。'),
+        _workflow(
+          2,
+          _t('让每一句话，拥有更多可能', 'Translating your content'),
+          _t(
+            '翻译结果逐条保存，可以随时暂停，再继续。',
+            'Results are saved as they arrive. Pause and resume whenever you need.',
+          ),
+        ),
         _Panel(
           child: Column(
             children: [
@@ -2232,12 +2675,12 @@ class _WorkspaceState extends State<_Workspace> {
               const SizedBox(height: 23),
               Text(
                 c.running
-                    ? '正在连接世界的语言'
+                    ? _t('正在连接世界的语言', 'Translation in progress')
                     : c.paused
-                    ? '翻译已暂停'
+                    ? _t('翻译已暂停', 'Translation paused')
                     : c.failed > 0
-                    ? '部分内容需要再试一次'
-                    : '译文已准备好',
+                    ? _t('部分内容需要再试一次', 'Some items need another try')
+                    : _t('译文已准备好', 'Translations are ready'),
                 style: const TextStyle(
                   fontSize: 24,
                   fontWeight: FontWeight.w600,
@@ -2248,8 +2691,11 @@ class _WorkspaceState extends State<_Workspace> {
                 c.running
                     ? c.activeLabel
                     : c.paused
-                    ? '已完成的结果已保留，恢复后继续处理未完成项。'
-                    : '接下来，花一点时间校对你的译文。',
+                    ? _t(
+                        '已完成的结果已保留，恢复后继续处理未完成项。',
+                        'Completed results are saved. Resume to finish pending items.',
+                      )
+                    : _t('接下来，花一点时间校对你的译文。', 'Next, review your translations.'),
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   fontSize: 13,
@@ -2275,7 +2721,10 @@ class _WorkspaceState extends State<_Workspace> {
                       children: [
                         Expanded(
                           child: Text(
-                            '${c.completed} / ${c.total} 已处理 · 复用 ${c.reused} 条',
+                            _t(
+                              '${c.completed} / ${c.total} 已处理 · 复用 ${c.reused} 条',
+                              '${c.completed} / ${c.total} processed · ${c.reused} reused',
+                            ),
                             style: const TextStyle(fontSize: 12, color: _muted),
                           ),
                         ),
@@ -2306,19 +2755,21 @@ class _WorkspaceState extends State<_Workspace> {
                     OutlinedButton.icon(
                       onPressed: c.pauseTranslation,
                       icon: const Icon(Icons.pause, size: 18),
-                      label: const Text('暂停翻译'),
+                      label: Text(_t('暂停翻译', 'Pause translation')),
                     ),
                   if (!c.running && c.paused)
                     FilledButton.icon(
                       onPressed: () => _startTranslation(resume: true),
                       icon: const Icon(Icons.play_arrow, size: 18),
-                      label: const Text('继续翻译'),
+                      label: Text(_t('继续翻译', 'Resume translation')),
                     ),
                   if (!c.running && c.failed > 0)
                     OutlinedButton.icon(
                       onPressed: () => _startTranslation(retry: true),
                       icon: const Icon(Icons.refresh, size: 18),
-                      label: Text('重试失败项 (${c.failed})'),
+                      label: Text(
+                        _t('重试失败项 (${c.failed})', 'Retry failed (${c.failed})'),
+                      ),
                     ),
                   FilledButton.icon(
                     onPressed: () {
@@ -2326,7 +2777,7 @@ class _WorkspaceState extends State<_Workspace> {
                       _go(_View.review);
                     },
                     icon: const Icon(Icons.fact_check_outlined, size: 18),
-                    label: const Text('进入翻译校对'),
+                    label: Text(_t('进入翻译校对', 'Review translations')),
                   ),
                 ],
               ),
@@ -2336,11 +2787,18 @@ class _WorkspaceState extends State<_Workspace> {
         ),
         if (c.error != null) ...[
           const SizedBox(height: 18),
-          _Notice(c.error!, icon: Icons.error_outline, warm: true),
+          _Notice(
+            _localizeError(c.error!),
+            icon: Icons.error_outline,
+            warm: true,
+          ),
         ],
         const SizedBox(height: 20),
-        const _Notice(
-          '额度耗尽或语言不支持时，可按设置尝试后续平台；鉴权或配置错误会停止。成功译文逐条保存，来源会显示在校对页。',
+        _Notice(
+          _t(
+            '额度耗尽或语言不支持时，可按设置尝试后续平台；鉴权或配置错误会停止。成功译文逐条保存，来源会显示在校对页。',
+            'When a provider runs out of quota or lacks a language, the next enabled provider may be tried. Authentication and configuration errors stop the task. Successful translations are saved individually.',
+          ),
           icon: Icons.shield_outlined,
         ),
       ],
@@ -2364,7 +2822,7 @@ class _WorkspaceState extends State<_Workspace> {
           SizedBox(
             width: 72,
             child: Text(
-              languageName(locale),
+              _localeLabel(locale),
               style: const TextStyle(fontSize: 12),
             ),
           ),
@@ -2383,7 +2841,7 @@ class _WorkspaceState extends State<_Workspace> {
             width: 80,
             child: Text(
               errors > 0
-                  ? '$done 完成 · $errors 失败'
+                  ? _t('$done 完成 · $errors 失败', '$done done · $errors failed')
                   : '$done / ${entries.length}',
               textAlign: TextAlign.right,
               style: TextStyle(
@@ -2403,22 +2861,28 @@ class _WorkspaceState extends State<_Workspace> {
     if (entries.isEmpty) {
       return _Empty(
         icon: Icons.fact_check_outlined,
-        title: '还没有待校对的文案',
-        detail: '先为项目添加内容，或在项目列表中勾选文案。',
+        title: _t('还没有待校对的文案', 'No strings to review'),
+        detail: _t(
+          '先为项目添加内容，或在项目列表中勾选文案。',
+          'Add content or select strings in the project.',
+        ),
         action: OutlinedButton(
           onPressed: () => _go(_View.project),
-          child: const Text('返回项目'),
+          child: Text(_t('返回项目', 'Back to project')),
         ),
       );
     }
     if (p.locales.isEmpty) {
       return _Empty(
         icon: Icons.public_rounded,
-        title: '先选择目标语言',
-        detail: '选择语言后就可以逐条翻译与校对。',
+        title: _t('先选择目标语言', 'Choose target languages first'),
+        detail: _t(
+          '选择语言后就可以逐条翻译与校对。',
+          'Then you can translate and review each string.',
+        ),
         action: FilledButton(
           onPressed: () => _go(_View.languages),
-          child: const Text('选择语言'),
+          child: Text(_t('选择语言', 'Choose languages')),
         ),
       );
     }
@@ -2437,14 +2901,21 @@ class _WorkspaceState extends State<_Workspace> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _workflow(2, '好译文，值得再看一眼', '逐条校对，让每一种语言都准确表达你的意思。'),
+        _workflow(
+          2,
+          _t('好译文，值得再看一眼', 'Review each translation'),
+          _t(
+            '逐条校对，让每一种语言都准确表达你的意思。',
+            'Check each string so every language says what you mean.',
+          ),
+        ),
         Wrap(
           spacing: 8,
           runSpacing: 8,
           children: p.locales
               .map(
                 (code) => ChoiceChip(
-                  label: Text(languageName(code)),
+                  label: Text(_localeLabel(code)),
                   selected: code == _locale,
                   onSelected: (_) => setState(() => _locale = code),
                 ),
@@ -2533,9 +3004,12 @@ class _WorkspaceState extends State<_Workspace> {
                         color: _muted,
                       ),
                     ),
-                    const Text('中文 →', style: TextStyle(fontSize: 13)),
                     Text(
-                      languageName(_locale),
+                      '${_sourceName(p)} →',
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                    Text(
+                      _localeLabel(_locale),
                       style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
@@ -2548,9 +3022,9 @@ class _WorkspaceState extends State<_Workspace> {
                   ],
                 ),
                 const SizedBox(height: 23),
-                const Text(
-                  '中文原文',
-                  style: TextStyle(fontSize: 11, color: _muted),
+                Text(
+                  _t('${_sourceName(p)}原文', '${_sourceName(p)} source'),
+                  style: const TextStyle(fontSize: 11, color: _muted),
                 ),
                 const SizedBox(height: 10),
                 Container(
@@ -2570,16 +3044,22 @@ class _WorkspaceState extends State<_Workspace> {
                   child: TextButton.icon(
                     onPressed: () => _editEntrySource(entry),
                     icon: const Icon(Icons.edit_outlined, size: 15),
-                    label: const Text('编辑原文', style: TextStyle(fontSize: 11)),
+                    label: Text(
+                      _t('编辑原文', 'Edit source'),
+                      style: const TextStyle(fontSize: 11),
+                    ),
                   ),
                 ),
                 TextFormField(
                   key: ValueKey('key-${entry.id}'),
                   initialValue: entry.key,
-                  decoration: const InputDecoration(
-                    labelText: '资源 Key',
-                    prefixIcon: Icon(Icons.key_outlined, size: 18),
-                    helperText: '小写英文、数字和下划线；以字母开头。',
+                  decoration: InputDecoration(
+                    labelText: _t('资源 Key', 'Resource key'),
+                    prefixIcon: const Icon(Icons.key_outlined, size: 18),
+                    helperText: _t(
+                      '小写英文、数字和下划线；以字母开头。',
+                      'Start with a letter; use lowercase letters, numbers, and underscores.',
+                    ),
                   ),
                   onChanged: (text) => c.updateEntryKey(entry, text),
                 ),
@@ -2587,17 +3067,26 @@ class _WorkspaceState extends State<_Workspace> {
                 _TranslationEditor(
                   key: ValueKey('translation-${entry.id}-$_locale'),
                   text: value.text,
-                  label: '${languageName(_locale)}译文',
+                  label: _t(
+                    '${languageName(_locale)}译文',
+                    '${_localeLabel(_locale)} translation',
+                  ),
                   onChanged: (text) => c.editTranslation(entry, _locale, text),
                 ),
                 const SizedBox(height: 13),
                 if (value.error.isNotEmpty) ...[
-                  _Notice(value.error, icon: Icons.error_outline, warm: true),
+                  _Notice(
+                    _localizeError(value.error),
+                    icon: Icons.error_outline,
+                    warm: true,
+                  ),
                   const SizedBox(height: 12),
                 ],
                 if (ownIssues.isNotEmpty) ...[
                   _Notice(
-                    ownIssues.map((issue) => issue.message).join('\n'),
+                    ownIssues
+                        .map((issue) => _localizeError(issue.message))
+                        .join('\n'),
                     icon: Icons.rule_rounded,
                     warm: true,
                   ),
@@ -2629,9 +3118,9 @@ class _WorkspaceState extends State<_Workspace> {
                                   _locale,
                                   !value.reviewed,
                                 ),
-                          child: const Text(
-                            '已人工校对确认',
-                            style: TextStyle(fontSize: 12),
+                          child: Text(
+                            _t('已人工校对确认', 'Reviewed and confirmed'),
+                            style: const TextStyle(fontSize: 12),
                           ),
                         ),
                       ],
@@ -2641,7 +3130,7 @@ class _WorkspaceState extends State<_Workspace> {
                           ? null
                           : () => _retranslate(entry, value),
                       icon: const Icon(Icons.refresh, size: 17),
-                      label: const Text('重新翻译'),
+                      label: Text(_t('重新翻译', 'Translate again')),
                     ),
                   ],
                 ),
@@ -2653,14 +3142,14 @@ class _WorkspaceState extends State<_Workspace> {
                         ? null
                         : () => setState(() => _reviewIndex--),
                     icon: const Icon(Icons.chevron_left),
-                    label: const Text('上一条'),
+                    label: Text(_t('上一条', 'Previous')),
                   ),
                   TextButton.icon(
                     onPressed: _reviewIndex == entries.length - 1
                         ? null
                         : () => setState(() => _reviewIndex++),
                     icon: const Icon(Icons.chevron_right),
-                    label: const Text('下一条'),
+                    label: Text(_t('下一条', 'Next')),
                   ),
                 ),
               ],
@@ -2675,8 +3164,14 @@ class _WorkspaceState extends State<_Workspace> {
           borderRadius: BorderRadius.circular(12),
           child: _Notice(
             issues.isEmpty
-                ? '完整性检查通过：Key 唯一、译文齐全、占位符一致。语义准确性仍需人工检查。'
-                : '发现 ${issues.length} 项完整性问题，点击查看。补齐译文与占位符后即可正式导出。',
+                ? _t(
+                    '完整性检查通过：Key 唯一、译文齐全、占位符一致。语义准确性仍需人工检查。',
+                    'Integrity check passed: keys are unique, translations are present, and placeholders match. Review meaning manually.',
+                  )
+                : _t(
+                    '发现 ${issues.length} 项完整性问题，点击查看。补齐译文与占位符后即可正式导出。',
+                    '${issues.length} integrity issues found. Tap to review before export.',
+                  ),
             icon: issues.isEmpty ? Icons.verified_outlined : Icons.rule_rounded,
             warm: issues.isNotEmpty,
           ),
@@ -2686,7 +3181,7 @@ class _WorkspaceState extends State<_Workspace> {
           TextButton.icon(
             onPressed: () => _go(_View.project),
             icon: const Icon(Icons.arrow_back, size: 18),
-            label: const Text('返回项目'),
+            label: Text(_t('返回项目', 'Back to project')),
           ),
           FilledButton.icon(
             onPressed: () {
@@ -2694,7 +3189,7 @@ class _WorkspaceState extends State<_Workspace> {
               _go(_View.export);
             },
             icon: const Icon(Icons.arrow_forward, size: 18),
-            label: const Text('下一步：导出语言包'),
+            label: Text(_t('下一步：导出语言包', 'Next: export language packs')),
           ),
         ),
       ],
@@ -2702,12 +3197,16 @@ class _WorkspaceState extends State<_Workspace> {
   }
 
   String _translationLabel(TranslationValue value) {
-    if (value.reviewed) return '已人工确认';
-    if (value.edited) return '人工编辑 · 待确认';
-    if (value.status == TranslationStatus.failed) return '翻译失败';
-    if (value.status == TranslationStatus.translating) return '翻译中';
-    if (value.text.trim().isEmpty) return '待翻译';
-    return '${value.provider.isEmpty ? '译文' : value.provider} · 待校对';
+    if (value.reviewed) return _t('已人工确认', 'Confirmed');
+    if (value.edited) return _t('人工编辑 · 待确认', 'Edited · review needed');
+    if (value.status == TranslationStatus.failed) {
+      return _t('翻译失败', 'Translation failed');
+    }
+    if (value.status == TranslationStatus.translating) {
+      return _t('翻译中', 'Translating');
+    }
+    if (value.text.trim().isEmpty) return _t('待翻译', 'Pending');
+    return '${value.provider.isEmpty ? _t('译文', 'Translation') : value.provider} · ${_t('待校对', 'Review needed')}';
   }
 
   Future<void> _retranslate(Entry entry, TranslationValue value) async {
@@ -2715,16 +3214,21 @@ class _WorkspaceState extends State<_Workspace> {
       final yes = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
-          title: const Text('替换人工校对过的译文？'),
-          content: const Text('原文将重新发送给翻译服务。新译文成功返回后替换当前内容，失败时保留现有译文。'),
+          title: Text(_t('替换人工校对过的译文？', 'Replace the reviewed translation?')),
+          content: Text(
+            _t(
+              '原文将重新发送给翻译服务。新译文成功返回后替换当前内容，失败时保留现有译文。',
+              'The source will be sent again. A successful result replaces the current translation; a failed request keeps it.',
+            ),
+          ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context, false),
-              child: const Text('取消'),
+              child: Text(_t('取消', 'Cancel')),
             ),
             FilledButton(
               onPressed: () => Navigator.pop(context, true),
-              child: const Text('重新翻译并替换'),
+              child: Text(_t('重新翻译并替换', 'Translate and replace')),
             ),
           ],
         ),
@@ -2742,10 +3246,16 @@ class _WorkspaceState extends State<_Workspace> {
 
   Future<void> _editEntrySource(Entry entry) async {
     final text = await _textDialog(
-      '编辑中文原文',
+      _t(
+        '编辑${_sourceName(c.currentProject!)}原文',
+        'Edit ${_sourceName(c.currentProject!)} source',
+      ),
       entry.source,
       lines: 7,
-      helper: '修改原文后，旧译文会失效，需要重新翻译或校对。',
+      helper: _t(
+        '修改原文后，旧译文会失效，需要重新翻译或校对。',
+        'Changing the source invalidates old translations. Translate or review them again.',
+      ),
     );
     if (text != null && text.trim().isNotEmpty) {
       c.updateEntrySource(entry, text.trim());
@@ -2778,7 +3288,7 @@ class _WorkspaceState extends State<_Workspace> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('取消'),
+            child: Text(_t('取消', 'Cancel')),
           ),
           FilledButton(
             onPressed: () {
@@ -2786,7 +3296,7 @@ class _WorkspaceState extends State<_Workspace> {
                 Navigator.pop(context, text.text);
               }
             },
-            child: const Text('保存'),
+            child: Text(_t('保存', 'Save')),
           ),
         ],
       ),
@@ -2800,11 +3310,16 @@ class _WorkspaceState extends State<_Workspace> {
     showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('语言包完整性检查'),
+        title: Text(_t('语言包完整性检查', 'Language pack integrity check')),
         content: SizedBox(
           width: 520,
           child: issues.isEmpty
-              ? const Text('Key 唯一、译文齐全、占位符一致。翻译的语义准确性仍需人工检查。')
+              ? Text(
+                  _t(
+                    'Key 唯一、译文齐全、占位符一致。翻译的语义准确性仍需人工检查。',
+                    'Keys are unique, translations are complete, and placeholders match. Meaning still needs human review.',
+                  ),
+                )
               : ConstrainedBox(
                   constraints: const BoxConstraints(maxHeight: 420),
                   child: ListView.separated(
@@ -2819,12 +3334,12 @@ class _WorkspaceState extends State<_Workspace> {
                         size: 20,
                       ),
                       title: Text(
-                        issues[index].message,
+                        _localizeError(issues[index].message),
                         style: const TextStyle(fontSize: 13),
                       ),
                       subtitle: issues[index].locale == null
                           ? null
-                          : Text(languageName(issues[index].locale!)),
+                          : Text(_localeLabel(issues[index].locale!)),
                     ),
                   ),
                 ),
@@ -2832,7 +3347,7 @@ class _WorkspaceState extends State<_Workspace> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('知道了'),
+            child: Text(_t('知道了', 'OK')),
           ),
         ],
       ),
@@ -2864,8 +3379,11 @@ class _WorkspaceState extends State<_Workspace> {
       children: [
         _workflow(
           3,
-          '把语言，带到你的产品中',
-          '每种语言独立成包，所有文案使用相同的 Key。',
+          _t('把语言，带到你的产品中', 'Bring languages into your product'),
+          _t(
+            '每种语言独立成包，所有文案使用相同的 Key。',
+            'Export one pack per language with the same keys.',
+          ),
           back: () => _go(_View.review),
         ),
         _columns(
@@ -2873,9 +3391,12 @@ class _WorkspaceState extends State<_Workspace> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  '准备导出的语言包',
-                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
+                Text(
+                  _t('准备导出的语言包', 'Language packs ready to export'),
+                  style: const TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
                 const SizedBox(height: 20),
                 for (final name in names)
@@ -2901,7 +3422,10 @@ class _WorkspaceState extends State<_Workspace> {
                               ),
                               const SizedBox(height: 4),
                               Text(
-                                '${_entries.length} 个 Key · ${utf8.encode(files[name]!).length} 字节',
+                                _t(
+                                  '${_entries.length} 个 Key · ${utf8.encode(files[name]!).length} 字节',
+                                  '${_entries.length} keys · ${utf8.encode(files[name]!).length} bytes',
+                                ),
                                 style: const TextStyle(
                                   fontSize: 10,
                                   color: _muted,
@@ -2921,10 +3445,19 @@ class _WorkspaceState extends State<_Workspace> {
                 const SizedBox(height: 17),
                 SwitchListTile.adaptive(
                   contentPadding: EdgeInsets.zero,
-                  title: const Text('包含中文源语言包', style: TextStyle(fontSize: 13)),
-                  subtitle: const Text(
-                    '一并导出 zh-Hans.json',
-                    style: TextStyle(fontSize: 11, color: _muted),
+                  title: Text(
+                    _t(
+                      '包含${_sourceName(p)}源语言包',
+                      'Include ${_sourceName(p)} source pack',
+                    ),
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                  subtitle: Text(
+                    _t(
+                      '一并导出 ${p.sourceLocale}.json',
+                      'Also export ${p.sourceLocale}.json',
+                    ),
+                    style: const TextStyle(fontSize: 11, color: _muted),
                   ),
                   value: c.settings.includeSource,
                   onChanged: c.running
@@ -2940,24 +3473,40 @@ class _WorkspaceState extends State<_Workspace> {
                 const Divider(),
                 SwitchListTile.adaptive(
                   contentPadding: EdgeInsets.zero,
-                  title: const Text('导出草稿', style: TextStyle(fontSize: 13)),
-                  subtitle: const Text(
-                    '允许缺失译文，ZIP 内附完整性报告',
-                    style: TextStyle(fontSize: 11, color: _muted),
+                  title: Text(
+                    _t('导出草稿', 'Export draft'),
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                  subtitle: Text(
+                    _t(
+                      '允许缺失译文，ZIP 内附完整性报告',
+                      'Allow missing translations and include an integrity report in the ZIP',
+                    ),
+                    style: const TextStyle(fontSize: 11, color: _muted),
                   ),
                   value: _draft,
                   onChanged: (value) => setState(() => _draft = value),
                 ),
                 const SizedBox(height: 15),
                 if (previewError != null)
-                  _Notice(previewError, icon: Icons.error_outline, warm: true)
+                  _Notice(
+                    _localizeError(previewError),
+                    icon: Icons.error_outline,
+                    warm: true,
+                  )
                 else
                   InkWell(
                     onTap: _showIssues,
                     child: _Notice(
                       issues.isEmpty
-                          ? '完整性检查通过，可以正式导出。'
-                          : '还有 ${issues.length} 项待处理问题。可返回校对，或导出带报告的草稿 ZIP。',
+                          ? _t(
+                              '完整性检查通过，可以正式导出。',
+                              'Integrity check passed. Ready to export.',
+                            )
+                          : _t(
+                              '还有 ${issues.length} 项待处理问题。可返回校对，或导出带报告的草稿 ZIP。',
+                              '${issues.length} issues remain. Return to review or export a draft ZIP with a report.',
+                            ),
                       icon: issues.isEmpty
                           ? Icons.verified_outlined
                           : Icons.rule_rounded,
@@ -2998,10 +3547,10 @@ class _WorkspaceState extends State<_Workspace> {
                             color: _green,
                           ),
                           const SizedBox(width: 9),
-                          const Expanded(
+                          Expanded(
                             child: Text(
-                              'JSON 预览',
-                              style: TextStyle(fontSize: 13),
+                              _t('JSON 预览', 'JSON preview'),
+                              style: const TextStyle(fontSize: 13),
                             ),
                           ),
                           if (names.isNotEmpty)
@@ -3042,7 +3591,12 @@ class _WorkspaceState extends State<_Workspace> {
                       child: SingleChildScrollView(
                         padding: const EdgeInsets.all(23),
                         child: SelectableText(
-                          preview.isEmpty ? '// 语言包预览将在这里显示' : preview,
+                          preview.isEmpty
+                              ? _t(
+                                  '// 语言包预览将在这里显示',
+                                  '// Language pack preview will appear here',
+                                )
+                              : preview,
                           style: const TextStyle(
                             fontFamily: 'monospace',
                             fontSize: 12,
@@ -3062,7 +3616,10 @@ class _WorkspaceState extends State<_Workspace> {
                         children: [
                           Expanded(
                             child: Text(
-                              '${utf8.encode(preview).length} 字节 · UTF-8',
+                              _t(
+                                '${utf8.encode(preview).length} 字节 · UTF-8',
+                                '${utf8.encode(preview).length} bytes · UTF-8',
+                              ),
                               style: const TextStyle(
                                 fontSize: 10,
                                 color: _muted,
@@ -3076,11 +3633,11 @@ class _WorkspaceState extends State<_Workspace> {
                                     await Clipboard.setData(
                                       ClipboardData(text: preview),
                                     );
-                                    _notify('JSON 已复制');
+                                    _notify(_t('JSON 已复制', 'JSON copied'));
                                   },
                             icon: const Icon(Icons.copy_outlined, size: 15),
-                            label: const Text(
-                              '复制',
+                            label: Text(
+                              _t('复制', 'Copy'),
                               style: TextStyle(fontSize: 11),
                             ),
                           ),
@@ -3096,16 +3653,19 @@ class _WorkspaceState extends State<_Workspace> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const Text(
-                      '你的语言包，已井然有序',
-                      style: TextStyle(
+                    Text(
+                      _t('你的语言包，已井然有序', 'Your language packs are ready'),
+                      style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
                     const SizedBox(height: 9),
                     Text(
-                      '${p.name} · ${_entries.length} 个 Key · ${p.locales.length} 种目标语言',
+                      _t(
+                        '${p.name} · ${_entries.length} 个 Key · ${p.locales.length} 种目标语言',
+                        '${p.name} · ${_entries.length} keys · ${p.locales.length} target languages',
+                      ),
                       style: const TextStyle(fontSize: 12, color: _muted),
                     ),
                     const SizedBox(height: 19),
@@ -3116,10 +3676,10 @@ class _WorkspaceState extends State<_Workspace> {
                       icon: const Icon(Icons.folder_zip_outlined, size: 19),
                       label: Text(
                         _saving
-                            ? '正在保存…'
+                            ? _t('正在保存…', 'Saving…')
                             : _draft
-                            ? '保存草稿语言包 .zip'
-                            : '保存全部语言包 .zip',
+                            ? _t('保存草稿语言包 .zip', 'Save draft .zip')
+                            : _t('保存全部语言包 .zip', 'Save all packs .zip'),
                       ),
                     ),
                     const SizedBox(height: 10),
@@ -3132,7 +3692,7 @@ class _WorkspaceState extends State<_Workspace> {
                             )
                           : null,
                       icon: const Icon(Icons.file_download_outlined, size: 18),
-                      label: const Text('保存当前 JSON'),
+                      label: Text(_t('保存当前 JSON', 'Save current JSON')),
                     ),
                   ],
                 ),
@@ -3145,12 +3705,12 @@ class _WorkspaceState extends State<_Workspace> {
           TextButton.icon(
             onPressed: () => _go(_View.review),
             icon: const Icon(Icons.arrow_back, size: 18),
-            label: const Text('返回校对'),
+            label: Text(_t('返回校对', 'Back to review')),
           ),
           TextButton.icon(
             onPressed: () => _go(_View.exports),
             icon: const Icon(Icons.history, size: 18),
-            label: const Text('查看导出记录'),
+            label: Text(_t('查看导出记录', 'View exports')),
           ),
         ),
       ],
@@ -3175,12 +3735,15 @@ class _WorkspaceState extends State<_Workspace> {
       children: [
         _PageHeading(
           eyebrow: 'TRANSLATION TASKS',
-          title: '翻译任务',
-          subtitle: '每一种语言的进度、失败与重试，都有迹可循。',
+          title: _t('翻译任务', 'Translation tasks'),
+          subtitle: _t(
+            '每一种语言的进度、失败与重试，都有迹可循。',
+            'Track progress, failures, and retries for each language.',
+          ),
           action: FilledButton.icon(
             onPressed: () => _beginInput(false),
             icon: const Icon(Icons.add, size: 18),
-            label: const Text('新建翻译'),
+            label: Text(_t('新建翻译', 'New translation')),
           ),
         ),
         const SizedBox(height: 25),
@@ -3197,12 +3760,12 @@ class _WorkspaceState extends State<_Workspace> {
                     Expanded(
                       child: Text(
                         c.running
-                            ? '翻译进行中'
+                            ? _t('翻译进行中', 'Translation in progress')
                             : c.paused
-                            ? '已暂停的任务'
+                            ? _t('已暂停的任务', 'Paused task')
                             : c.failed > 0
-                            ? '最近任务 · 部分失败'
-                            : '最近任务 · 已完成',
+                            ? _t('最近任务 · 部分失败', 'Recent task · some failed')
+                            : _t('最近任务 · 已完成', 'Recent task · complete'),
                         style: const TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w600,
@@ -3215,7 +3778,7 @@ class _WorkspaceState extends State<_Workspace> {
                         ))
                       TextButton(
                         onPressed: _openActiveProgress,
-                        child: const Text('查看任务'),
+                        child: Text(_t('查看任务', 'View task')),
                       ),
                   ],
                 ),
@@ -3227,7 +3790,10 @@ class _WorkspaceState extends State<_Workspace> {
                 ),
                 const SizedBox(height: 13),
                 Text(
-                  '已处理 ${c.completed}/${c.total} · 失败 ${c.failed}',
+                  _t(
+                    '已处理 ${c.completed}/${c.total} · 失败 ${c.failed}',
+                    '${c.completed}/${c.total} processed · ${c.failed} failed',
+                  ),
                   style: const TextStyle(fontSize: 12, color: _muted),
                 ),
               ],
@@ -3239,11 +3805,14 @@ class _WorkspaceState extends State<_Workspace> {
           _Panel(
             child: _Empty(
               icon: Icons.translate_rounded,
-              title: '从一段中文开始',
-              detail: '添加项目文案、选择目标语言，然后开始第一次真实翻译。',
+              title: _t('从一段原文开始', 'Start with some source text'),
+              detail: _t(
+                '添加项目文案、选择目标语言，然后开始第一次真实翻译。',
+                'Add strings, choose target languages, and start translating.',
+              ),
               action: OutlinedButton(
                 onPressed: () => _beginInput(false),
-                child: const Text('开始翻译'),
+                child: Text(_t('开始翻译', 'Start translating')),
               ),
             ),
           )
@@ -3276,7 +3845,10 @@ class _WorkspaceState extends State<_Workspace> {
                                 ),
                                 const SizedBox(height: 7),
                                 Text(
-                                  '${p.entries.length} 条文案 · ${p.locales.length} 种语言 · 已有 ${p.translatedCount}/${p.totalCount} 条译文',
+                                  _t(
+                                    '${p.entries.length} 条文案 · ${p.locales.length} 种语言 · 已有 ${p.translatedCount}/${p.totalCount} 条译文',
+                                    '${p.entries.length} strings · ${p.locales.length} languages · ${p.translatedCount}/${p.totalCount} translations',
+                                  ),
                                   style: const TextStyle(
                                     fontSize: 11,
                                     color: _muted,
@@ -3292,7 +3864,7 @@ class _WorkspaceState extends State<_Workspace> {
                               c.openProject(p.id);
                               _go(_View.project);
                             },
-                            child: const Text('查看项目'),
+                            child: Text(_t('查看项目', 'View project')),
                           ),
                         ],
                       ),
@@ -3316,9 +3888,9 @@ class _WorkspaceState extends State<_Workspace> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          '任务记录',
-          style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
+        Text(
+          _t('任务记录', 'Task history'),
+          style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
         ),
         const SizedBox(height: 15),
         _Panel(
@@ -3354,7 +3926,10 @@ class _WorkspaceState extends State<_Workspace> {
                             ),
                             const SizedBox(height: 6),
                             Text(
-                              '${_taskStatus(pair.$2)} · 已处理 ${pair.$2.completed}/${pair.$2.total} · 复用 ${pair.$2.reused} · 失败 ${pair.$2.failed}',
+                              _t(
+                                '${_taskStatus(pair.$2)} · 已处理 ${pair.$2.completed}/${pair.$2.total} · 复用 ${pair.$2.reused} · 失败 ${pair.$2.failed}',
+                                '${_taskStatus(pair.$2)} · ${pair.$2.completed}/${pair.$2.total} processed · ${pair.$2.reused} reused · ${pair.$2.failed} failed',
+                              ),
                               style: const TextStyle(
                                 fontSize: 11,
                                 color: _muted,
@@ -3362,7 +3937,7 @@ class _WorkspaceState extends State<_Workspace> {
                               ),
                             ),
                             Text(
-                              '${pair.$2.provider.isEmpty ? '翻译服务' : pair.$2.provider} · ${_date(pair.$2.createdAt)}',
+                              '${pair.$2.provider.isEmpty ? _t('翻译服务', 'Provider') : pair.$2.provider} · ${_date(pair.$2.createdAt)}',
                               style: const TextStyle(
                                 fontSize: 10,
                                 color: _muted,
@@ -3376,7 +3951,7 @@ class _WorkspaceState extends State<_Workspace> {
                           c.openProject(pair.$1.id);
                           _go(_View.project);
                         },
-                        child: const Text('查看文案'),
+                        child: Text(_t('查看文案', 'View strings')),
                       ),
                     ],
                   ),
@@ -3389,10 +3964,10 @@ class _WorkspaceState extends State<_Workspace> {
   }
 
   String _taskStatus(TaskRecord record) => switch (record.status) {
-    'running' => '翻译中',
-    'paused' => '已暂停',
-    'stopped' => '已停止',
-    _ => record.failed > 0 ? '部分失败' : '已完成',
+    'running' => _t('翻译中', 'Translating'),
+    'paused' => _t('已暂停', 'Paused'),
+    'stopped' => _t('已停止', 'Stopped'),
+    _ => record.failed > 0 ? _t('部分失败', 'Some failed') : _t('已完成', 'Completed'),
   };
 
   Widget _exports() {
@@ -3406,21 +3981,27 @@ class _WorkspaceState extends State<_Workspace> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const _PageHeading(
+        _PageHeading(
           eyebrow: 'EXPORT HISTORY',
-          title: '导出记录',
-          subtitle: '每一次交付，都可以重新获取。保留最近的语言包快照。',
+          title: _t('导出记录', 'Exports'),
+          subtitle: _t(
+            '每一次交付，都可以重新获取。保留最近的语言包快照。',
+            'Save recent language pack snapshots again whenever you need.',
+          ),
         ),
         const SizedBox(height: 25),
         if (records.isEmpty)
           _Panel(
             child: _Empty(
               icon: Icons.folder_zip_outlined,
-              title: '语言包准备好时，就来这里',
-              detail: '完成翻译校对并保存后，语言包快照会出现在这里。',
+              title: _t('语言包准备好时，就来这里', 'Your exports will appear here'),
+              detail: _t(
+                '完成翻译校对并保存后，语言包快照会出现在这里。',
+                'Review and save a language pack to create a snapshot.',
+              ),
               action: OutlinedButton(
                 onPressed: () => _go(_View.home),
-                child: const Text('返回我的项目'),
+                child: Text(_t('返回我的项目', 'Back to projects')),
               ),
             ),
           )
@@ -3464,7 +4045,10 @@ class _WorkspaceState extends State<_Workspace> {
                             ),
                             const SizedBox(height: 7),
                             Text(
-                              '${project.name} · ${record.files.length} 个文件 · ${record.draft ? '草稿' : '正式'} · ${_date(record.createdAt)}',
+                              _t(
+                                '${project.name} · ${record.files.length} 个文件 · ${record.draft ? '草稿' : '正式'} · ${_date(record.createdAt)}',
+                                '${project.name} · ${record.files.length} files · ${record.draft ? 'Draft' : 'Final'} · ${_date(record.createdAt)}',
+                              ),
                               style: const TextStyle(
                                 fontSize: 11,
                                 color: _muted,
@@ -3479,7 +4063,7 @@ class _WorkspaceState extends State<_Workspace> {
                         onPressed: _saving
                             ? null
                             : () => _saveExport(() => c.downloadRecord(record)),
-                        tooltip: '重新保存语言包',
+                        tooltip: _t('重新保存语言包', 'Save language pack again'),
                         icon: const Icon(
                           Icons.file_download_outlined,
                           color: _green,
@@ -3501,7 +4085,9 @@ class _WorkspaceState extends State<_Workspace> {
       DropdownButtonFormField<String>(
         key: ValueKey('primary-${c.settings.providerOrder.first}'),
         initialValue: c.settings.providerOrder.first,
-        decoration: const InputDecoration(labelText: '首选翻译平台'),
+        decoration: InputDecoration(
+          labelText: _t('首选翻译平台', 'Preferred provider'),
+        ),
         items: translationProviders
             .map(
               (provider) =>
@@ -3520,10 +4106,16 @@ class _WorkspaceState extends State<_Workspace> {
       ),
       SwitchListTile.adaptive(
         contentPadding: EdgeInsets.zero,
-        title: const Text('启用按顺序备用', style: TextStyle(fontSize: 13)),
-        subtitle: const Text(
-          '仅额度耗尽或语言不支持时切换；鉴权和配置错误会停止。',
-          style: TextStyle(fontSize: 11),
+        title: Text(
+          _t('启用按顺序备用', 'Enable ordered fallback'),
+          style: const TextStyle(fontSize: 13),
+        ),
+        subtitle: Text(
+          _t(
+            '仅额度耗尽或语言不支持时切换；鉴权和配置错误会停止。',
+            'Switch only when quota is exhausted or a language is unsupported. Authentication and configuration errors stop the task.',
+          ),
+          style: const TextStyle(fontSize: 11),
         ),
         value: c.settings.providerFallback,
         onChanged: (value) => _guard(
@@ -3537,15 +4129,21 @@ class _WorkspaceState extends State<_Workspace> {
           Expanded(
             child: Text(
               _backupConfigured == true
-                  ? '开发者访问码已验证，可使用授权服务'
-                  : '开发者服务需访问码授权；自备密钥可独立配置。',
+                  ? _t(
+                      '开发者访问码已验证，可使用授权服务',
+                      'Developer access code verified. Authorized service is available.',
+                    )
+                  : _t(
+                      '开发者服务需访问码授权；自备密钥可独立配置。',
+                      'Developer service requires an access code. You can also configure your own key.',
+                    ),
               style: const TextStyle(fontSize: 11, color: _muted),
             ),
           ),
           const SizedBox(width: 8),
           OutlinedButton(
             onPressed: _checkBackupConnection,
-            child: const Text('检测服务'),
+            child: Text(_t('检测服务', 'Check service')),
           ),
         ],
       ),
@@ -3562,16 +4160,38 @@ class _WorkspaceState extends State<_Workspace> {
     final hasCredentialData = c.credentialsFor(provider).isNotEmpty;
     final validation = c.credentialValidationFor(provider);
     final description = switch (provider) {
-      'MyMemory' => '可匿名使用；联系邮箱与私有词库密钥可选。支持 31 种目标语言；私有词库密钥不代表额度增加。',
-      'ZTAITrans' => '自备 API 密钥或开发者访问码；不再提供匿名共享额度。',
-      'DeepL' =>
+      'MyMemory' => _t(
+        '可匿名使用；联系邮箱与私有词库密钥可选。支持 31 种目标语言；私有词库密钥不代表额度增加。',
+        'Anonymous use is available. Contact email and private memory key are optional. Supports 31 target languages; a private memory key does not increase quota.',
+      ),
+      'ZTAITrans' => _t(
+        '自备 API 密钥或开发者访问码；不再提供匿名共享额度。',
+        'Use your own API key or a developer access code. Shared anonymous quota is no longer available.',
+      ),
+      'DeepL' => _t(
         '请选择控制台对应的 free / pro 接口。新注册 Developer 额度为总计 100 万字符；旧 Free 为每月 50 万，具体以账户为准。',
-      'Azure' => 'F0 层每月 200 万字符，到限停止；其他定价层以账户配置为准。',
-      'Google' => 'Basic 每月 50 万 NMT 字符抵扣，需启用结算，超额收费；请在账户设置用量限额。',
-      'Baidu' => '百度通用翻译：标准版每月 5 万、高级版 100 万、尊享版 200 万字符，超额收费；扩展语种可能需企业尊享版。',
-      'Tencent' =>
+        'Choose the free or pro endpoint shown in your DeepL console. Character allowances depend on your account plan.',
+      ),
+      'Azure' => _t(
+        'F0 层每月 200 万字符，到限停止；其他定价层以账户配置为准。',
+        'The F0 tier has a monthly character allowance. Other limits depend on your account.',
+      ),
+      'Google' => _t(
+        'Basic 每月 50 万 NMT 字符抵扣，需启用结算，超额收费；请在账户设置用量限额。',
+        'Billing must be enabled. Check your account for credits and set usage limits.',
+      ),
+      'Baidu' => _t(
+        '百度通用翻译：标准版每月 5 万、高级版 100 万、尊享版 200 万字符，超额收费；扩展语种可能需企业尊享版。',
+        'Baidu pricing and language support depend on your account tier. Check your console and set usage limits.',
+      ),
+      'Tencent' => _t(
         '腾讯文本翻译仅适用于既有账户，免费资源包已停发；服务将于 2027 年 10 月 1 日停用。当前支持 15 种目标语言。',
-      _ => '阿里云通用版主账户每月 100 万字符，子账户共享；超额后付费，使用前请设置限额。',
+        'Tencent Text Translation is available only to existing accounts. The free package has ended and service ends on October 1, 2027. Currently supports 15 target languages.',
+      ),
+      _ => _t(
+        '阿里云通用版主账户每月 100 万字符，子账户共享；超额后付费，使用前请设置限额。',
+        'Alibaba Cloud allowance is shared across subaccounts. Usage beyond the allowance is billed. Set limits before use.',
+      ),
     };
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
@@ -3593,7 +4213,7 @@ class _WorkspaceState extends State<_Workspace> {
               ),
               Expanded(
                 child: Text(
-                  '$provider${index < 0 ? '' : ' · 顺序 ${index + 1}'}',
+                  '$provider${index < 0 ? '' : _t(' · 顺序 ${index + 1}', ' · Order ${index + 1}')}',
                   style: const TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w600,
@@ -3602,7 +4222,7 @@ class _WorkspaceState extends State<_Workspace> {
               ),
               if (index > 0)
                 IconButton(
-                  tooltip: '上移 $provider',
+                  tooltip: _t('上移 $provider', 'Move $provider up'),
                   icon: const Icon(Icons.arrow_upward, size: 18),
                   onPressed: () {
                     final updated = [...order];
@@ -3622,22 +4242,31 @@ class _WorkspaceState extends State<_Workspace> {
             Text(
               configured
                   ? (c.credentialsSaved(provider)
-                        ? '凭据：•••••• · 已在本机保存'
-                        : '凭据：•••••• · 仅本次会话')
+                        ? _t(
+                            '凭据：•••••• · 已在本机保存',
+                            'Credentials: •••••• · Saved on this device',
+                          )
+                        : _t(
+                            '凭据：•••••• · 仅本次会话',
+                            'Credentials: •••••• · This session only',
+                          ))
                   : provider == 'MyMemory'
-                  ? '匿名模式（未配置私有词库密钥）'
+                  ? _t(
+                      '匿名模式（未配置私有词库密钥）',
+                      'Anonymous mode (no private memory key)',
+                    )
                   : hasCredentialData
-                  ? '凭据尚未填写完整'
-                  : '尚未配置凭据',
+                  ? _t('凭据尚未填写完整', 'Credentials are incomplete')
+                  : _t('尚未配置凭据', 'Credentials not configured'),
               style: const TextStyle(fontSize: 11, color: _muted),
             ),
             const SizedBox(height: 6),
             Text(
               '${validation.status == 'checking'
-                  ? '当前验证'
+                  ? _t('当前验证', 'Current check')
                   : validation.status == 'unverified'
-                  ? '验证状态'
-                  : '上次验证'}：${validation.label}',
+                  ? _t('验证状态', 'Verification status')
+                  : _t('上次验证', 'Last check')}${_en ? ': ' : '：'}${_validationLabel(validation)}',
               key: ValueKey('validation-status-$provider'),
               style: TextStyle(
                 fontSize: 12,
@@ -3649,14 +4278,17 @@ class _WorkspaceState extends State<_Workspace> {
               ),
             ),
             Text(
-              validation.message,
+              _validationMessage(validation),
               style: const TextStyle(fontSize: 11, color: _muted, height: 1.6),
             ),
             if (validation.billableCharacters != null)
               Text(
                 validation.billableCharacters == 1
-                    ? '本次验证最多可能产生 1 字符用量'
-                    : '本次验证字符用量：0',
+                    ? _t(
+                        '本次验证最多可能产生 1 字符用量',
+                        'This check may use up to 1 billable character',
+                      )
+                    : _t('本次验证字符用量：0', 'Billable characters for this check: 0'),
                 style: const TextStyle(fontSize: 11, color: _muted),
               ),
             Wrap(
@@ -3664,7 +4296,7 @@ class _WorkspaceState extends State<_Workspace> {
               children: [
                 TextButton(
                   onPressed: () => _providerCredentialDialog(provider),
-                  child: Text('配置 $provider'),
+                  child: Text(_t('配置 $provider', 'Configure $provider')),
                 ),
                 if (configured || provider == 'MyMemory')
                   TextButton(
@@ -3679,15 +4311,17 @@ class _WorkspaceState extends State<_Workspace> {
                           ),
                     child: Text(
                       validation.status == 'checking'
-                          ? '验证中…'
-                          : '重新验证 $provider',
+                          ? _t('验证中…', 'Checking…')
+                          : _t('重新验证 $provider', 'Recheck $provider'),
                     ),
                   ),
                 if (hasCredentialData)
                   TextButton(
                     onPressed: () =>
                         _guard(() => c.clearProviderCredentials(provider)),
-                    child: Text('清除 $provider 凭据'),
+                    child: Text(
+                      _t('清除 $provider 凭据', 'Clear $provider credentials'),
+                    ),
                   ),
               ],
             ),
@@ -3697,12 +4331,58 @@ class _WorkspaceState extends State<_Workspace> {
     );
   }
 
+  String _validationLabel(CredentialValidation validation) {
+    if (!_en) return validation.label;
+    return switch (validation.status) {
+      'checking' => 'Checking',
+      'valid' =>
+        validation.method == 'metadata'
+            ? 'Authorization checked (no test translation)'
+            : validation.method == 'translation'
+            ? 'One-character test passed'
+            : 'Anonymous mode needs no key',
+      'invalid' => 'Credentials or configuration invalid',
+      'limited' => 'Check limited',
+      'unavailable' => 'Not verified',
+      _ => 'Not checked',
+    };
+  }
+
+  String _validationMessage(CredentialValidation validation) {
+    if (!_en) return validation.message;
+    return switch (validation.status) {
+      'checking' =>
+        'Checking now. Some providers may use one billable character.',
+      'valid' =>
+        validation.method == 'metadata'
+            ? 'Authorization or catalog access passed. Translation in every target language was not tested.'
+            : validation.method == 'anonymous'
+            ? 'No credentials are needed. Service availability and remaining quota were not checked.'
+            : 'A minimal test translation passed. Check remaining quota and plan details in your provider console.',
+      'invalid' =>
+        'The provider did not accept these credentials or settings. Check them and try again.',
+      'limited' =>
+        'Rate, balance, or quota limits may prevent verification. Try later or check the provider console.',
+      'unavailable' =>
+        'Verification could not be completed. Check the provider or proxy connection and try again.',
+      _ => 'These credentials have not been checked in this session.',
+    };
+  }
+
   String _credentialLabel(String provider, String field) => switch (field) {
-    'apiKey' => provider == 'MyMemory' ? '私有词库 API 密钥（可留空匿名）' : 'API 密钥',
-    'developerToken' => '开发者访问码',
-    'tenantId' => 'Tenant ID（选填）',
+    'apiKey' =>
+      provider == 'MyMemory'
+          ? _t(
+              '私有词库 API 密钥（可留空匿名）',
+              'Private memory API key (blank for anonymous use)',
+            )
+          : _t('API 密钥', 'API key'),
+    'developerToken' => _t('开发者访问码', 'Developer access code'),
+    'tenantId' => _t('Tenant ID（选填）', 'Tenant ID (optional)'),
     'region' =>
-      provider == 'Tencent' ? '区域（默认 ap-guangzhou）' : '区域（选填，如 eastasia）',
+      provider == 'Tencent'
+          ? _t('区域（默认 ap-guangzhou）', 'Region (default: ap-guangzhou)')
+          : _t('区域（选填，如 eastasia）', 'Region (optional, e.g. eastasia)'),
     'appId' => 'App ID',
     'secretId' => 'Secret ID',
     'secretKey' => 'Secret Key',
@@ -3733,7 +4413,7 @@ class _WorkspaceState extends State<_Workspace> {
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, update) => AlertDialog(
-          title: Text('配置 $provider'),
+          title: Text(_t('配置 $provider', 'Configure $provider')),
           content: SizedBox(
             width: 420,
             child: SingleChildScrollView(
@@ -3744,7 +4424,7 @@ class _WorkspaceState extends State<_Workspace> {
                   if (provider == 'ZTAITrans')
                     SwitchListTile.adaptive(
                       contentPadding: EdgeInsets.zero,
-                      title: const Text('开发者访问码模式'),
+                      title: Text(_t('开发者访问码模式', 'Developer access code mode')),
                       value: developer,
                       onChanged: (value) => update(() => developer = value),
                     ),
@@ -3766,42 +4446,63 @@ class _WorkspaceState extends State<_Workspace> {
                       ),
                     ),
                   if (provider == 'Alibaba')
-                    const Padding(
+                    Padding(
                       padding: EdgeInsets.only(top: 10),
                       child: Text(
-                        '服务区域固定为 cn-hangzhou，签名由代理完成。',
-                        style: TextStyle(fontSize: 11, color: _muted),
+                        _t(
+                          '服务区域固定为 cn-hangzhou，签名由代理完成。',
+                          'The service region is fixed to cn-hangzhou. The proxy signs requests.',
+                        ),
+                        style: const TextStyle(fontSize: 11, color: _muted),
                       ),
                     ),
                   if (provider == 'DeepL')
                     DropdownButtonFormField<String>(
                       initialValue: plan,
                       isExpanded: true,
-                      decoration: const InputDecoration(labelText: '账户接口'),
-                      items: const [
+                      decoration: InputDecoration(
+                        labelText: _t('账户接口', 'Account endpoint'),
+                      ),
+                      items: [
                         DropdownMenuItem(
                           value: 'free',
-                          child: Text('免费接口 · api-free'),
+                          child: Text(
+                            _t('免费接口 · api-free', 'Free endpoint · api-free'),
+                          ),
                         ),
                         DropdownMenuItem(
                           value: 'pro',
-                          child: Text('标准接口 · api'),
+                          child: Text(_t('标准接口 · api', 'Pro endpoint · api')),
                         ),
                       ],
                       onChanged: (value) =>
                           update(() => plan = value ?? 'free'),
                     ),
                   const SizedBox(height: 12),
-                  const Text(
-                    '保存后自动验证。部分平台将试译“好”→英语，可能产生 1 字符用量；重新验证也可能计费。',
-                    style: TextStyle(fontSize: 11, color: _muted, height: 1.6),
+                  Text(
+                    _t(
+                      '保存后自动验证。部分平台将试译“好”→英语，可能产生 1 字符用量；重新验证也可能计费。',
+                      'Credentials are checked after saving. Some providers run a one-character test translation, which may be billable. Rechecking may also incur usage.',
+                    ),
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: _muted,
+                      height: 1.6,
+                    ),
                   ),
                   const SizedBox(height: 8),
                   CheckboxListTile(
                     contentPadding: EdgeInsets.zero,
                     value: remember,
-                    title: const Text('在本机保存凭据'),
-                    subtitle: const Text('默认仅本次会话。本机保存不额外加密；共享设备请保持关闭。'),
+                    title: Text(
+                      _t('在本机保存凭据', 'Save credentials on this device'),
+                    ),
+                    subtitle: Text(
+                      _t(
+                        '默认仅本次会话。本机保存不额外加密；共享设备请保持关闭。',
+                        'By default, credentials last only for this session. Device storage adds no encryption; leave this off on shared devices.',
+                      ),
+                    ),
                     onChanged: (value) =>
                         update(() => remember = value == true),
                   ),
@@ -3817,7 +4518,7 @@ class _WorkspaceState extends State<_Workspace> {
           actions: [
             TextButton(
               onPressed: saving ? null : () => Navigator.pop(dialogContext),
-              child: const Text('取消'),
+              child: Text(_t('取消', 'Cancel')),
             ),
             FilledButton(
               onPressed: saving
@@ -3842,14 +4543,17 @@ class _WorkspaceState extends State<_Workspace> {
                         if (dialogContext.mounted) {
                           update(() {
                             error = failure is FormatException
-                                ? failure.message
-                                : '请检查必填凭据和配置，然后重试。';
+                                ? _localizeError(failure.message)
+                                : _t(
+                                    '请检查必填凭据和配置，然后重试。',
+                                    'Check required credentials and settings, then try again.',
+                                  );
                             saving = false;
                           });
                         }
                       }
                     },
-              child: const Text('保存配置'),
+              child: Text(_t('保存配置', 'Save configuration')),
             ),
           ],
         ),
@@ -3865,10 +4569,10 @@ class _WorkspaceState extends State<_Workspace> {
   Widget _settings() => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      const _PageHeading(
+      _PageHeading(
         eyebrow: 'WORKSPACE PREFERENCES',
-        title: '偏好设置',
-        subtitle: '让工作台，更贴近你的使用习惯。',
+        title: _t('偏好设置', 'Settings'),
+        subtitle: _t('让工作台，更贴近你的使用习惯。', 'Make this workspace work for you.'),
       ),
       const SizedBox(height: 25),
       _columns(
@@ -3876,13 +4580,19 @@ class _WorkspaceState extends State<_Workspace> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                '翻译服务',
-                style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
+              Text(
+                _t('翻译服务', 'Translation services'),
+                style: const TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
               const SizedBox(height: 18),
-              const _Notice(
-                '选中的原文仅发送给已启用的平台。MyMemory 无需密钥，其他平台使用你配置的密钥或开发者访问码；凭据默认只在本次会话使用。',
+              _Notice(
+                _t(
+                  '选中的原文仅发送给已启用的平台。MyMemory 无需密钥，其他平台使用你配置的密钥或开发者访问码；凭据默认只在本次会话使用。',
+                  'Selected source text is sent only to enabled providers. MyMemory works without a key. Other providers use the credentials you configure, which stay in this session by default.',
+                ),
                 icon: Icons.shield_outlined,
               ),
               const SizedBox(height: 23),
@@ -3891,10 +4601,16 @@ class _WorkspaceState extends State<_Workspace> {
                 initialValue: c.settings.email,
                 readOnly: true,
                 keyboardType: TextInputType.emailAddress,
-                decoration: const InputDecoration(
-                  labelText: 'MyMemory 联系邮箱（选填）',
+                decoration: InputDecoration(
+                  labelText: _t(
+                    'MyMemory 联系邮箱（选填）',
+                    'MyMemory contact email (optional)',
+                  ),
                   hintText: 'you@example.com',
-                  helperText: '仅填写你自己的有效邮箱，会随翻译请求发送。',
+                  helperText: _t(
+                    '仅填写你自己的有效邮箱，会随翻译请求发送。',
+                    'Use your own valid email. It is sent with translation requests.',
+                  ),
                   helperMaxLines: 2,
                 ),
                 onFieldSubmitted: (value) => _saveSettings(email: value),
@@ -3903,16 +4619,19 @@ class _WorkspaceState extends State<_Workspace> {
               TextButton.icon(
                 onPressed: () async {
                   final email = await _textDialog(
-                    '设置 MyMemory 联系邮箱',
+                    _t('设置 MyMemory 联系邮箱', 'Set MyMemory contact email'),
                     c.settings.email,
                     lines: 1,
                     allowEmpty: true,
-                    helper: '提交后会随翻译请求发送。留空使用匿名额度。',
+                    helper: _t(
+                      '提交后会随翻译请求发送。留空使用匿名额度。',
+                      'It will be sent with requests. Leave blank for anonymous use.',
+                    ),
                   );
                   if (email != null) await _saveSettings(email: email.trim());
                 },
                 icon: const Icon(Icons.edit_outlined, size: 16),
-                label: const Text('修改联系邮箱'),
+                label: Text(_t('修改联系邮箱', 'Change contact email')),
               ),
               const SizedBox(height: 16),
               const Divider(),
@@ -3927,9 +4646,12 @@ class _WorkspaceState extends State<_Workspace> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    '连接与导出',
-                    style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
+                  Text(
+                    _t('连接与导出', 'Connection and export'),
+                    style: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                   const SizedBox(height: 20),
                   TextFormField(
@@ -3941,11 +4663,19 @@ class _WorkspaceState extends State<_Workspace> {
                     readOnly: true,
                     keyboardType: TextInputType.url,
                     decoration: InputDecoration(
-                      labelText: '翻译代理服务',
-                      hintText: kIsWeb ? '使用当前网站的同源服务' : '内置在线服务（无需配置）',
+                      labelText: _t('翻译代理服务', 'Translation proxy'),
+                      hintText: kIsWeb
+                          ? _t('使用当前网站的同源服务', 'Use this website’s service')
+                          : _t('内置在线服务（无需配置）', 'Built-in online service'),
                       helperText: kIsWeb
-                          ? 'Web 使用同源代理转发你配置的凭据，不将凭据写入项目或导出。'
-                          : '默认使用与在线工作台相同的代理。付费平台需自备密钥，可按需切换自定义服务器。',
+                          ? _t(
+                              'Web 使用同源代理转发你配置的凭据，不将凭据写入项目或导出。',
+                              'The website forwards your credentials through its proxy. They are not stored in projects or exports.',
+                            )
+                          : _t(
+                              '默认使用与在线工作台相同的代理。付费平台需自备密钥，可按需切换自定义服务器。',
+                              'Uses the online workspace proxy. Paid providers require your own keys; you can set a custom server.',
+                            ),
                       helperMaxLines: 3,
                     ),
                     onFieldSubmitted: (value) => _saveSettings(baseUrl: value),
@@ -3955,25 +4685,30 @@ class _WorkspaceState extends State<_Workspace> {
                     TextButton.icon(
                       onPressed: () async {
                         final base = await _textDialog(
-                          '自定义翻译代理（选填）',
+                          _t(
+                            '自定义翻译代理（选填）',
+                            'Custom translation proxy (optional)',
+                          ),
                           c.settings.apiBaseUrl,
                           lines: 1,
                           allowEmpty: true,
-                          helper:
-                              '留空使用内置在线代理。自定义地址需为提供翻译代理的 HTTPS 根域名；密钥在平台配置中填写。',
+                          helper: _t(
+                            '留空使用内置在线代理。自定义地址需为提供翻译代理的 HTTPS 根域名；密钥在平台配置中填写。',
+                            'Leave blank to use the built-in proxy. A custom URL must be an HTTPS origin for a compatible translation proxy.',
+                          ),
                         );
                         if (base != null) {
                           await _saveSettings(baseUrl: base.trim());
                         }
                       },
                       icon: const Icon(Icons.link, size: 16),
-                      label: const Text('自定义服务器（可选）'),
+                      label: Text(_t('自定义服务器（可选）', 'Custom server (optional)')),
                     ),
                     if (c.settings.apiBaseUrl.trim().isNotEmpty)
                       TextButton.icon(
                         onPressed: () => _saveSettings(baseUrl: ''),
                         icon: const Icon(Icons.restore, size: 16),
-                        label: const Text('恢复内置在线服务'),
+                        label: Text(_t('恢复内置在线服务', 'Restore built-in service')),
                       ),
                   ],
                   const SizedBox(height: 18),
@@ -3981,37 +4716,50 @@ class _WorkspaceState extends State<_Workspace> {
                     contentPadding: EdgeInsets.zero,
                     value: c.settings.includeSource,
                     onChanged: (value) => _saveSettings(includeSource: value),
-                    title: const Text(
-                      '默认包含中文源语言包',
-                      style: TextStyle(fontSize: 13),
+                    title: Text(
+                      _t('默认包含源语言包', 'Include source pack by default'),
+                      style: const TextStyle(fontSize: 13),
                     ),
-                    subtitle: const Text(
-                      '导出时同时生成 zh-Hans.json',
-                      style: TextStyle(fontSize: 11, color: _muted),
+                    subtitle: Text(
+                      _t(
+                        '导出时同时生成项目源语言 JSON',
+                        'Export a JSON file for the project’s source language',
+                      ),
+                      style: const TextStyle(fontSize: 11, color: _muted),
                     ),
                   ),
                   const Divider(),
-                  _summary('Key 命名', 'snake_case'),
-                  _summary('导出格式', 'UTF-8 JSON / ZIP'),
+                  _summary(_t('Key 命名', 'Key format'), 'snake_case'),
+                  _summary(_t('导出格式', 'Export format'), 'UTF-8 JSON / ZIP'),
                 ],
               ),
             ),
             const SizedBox(height: 18),
-            const _Panel(
+            _Panel(
               color: Color(0xFFEEF4E9),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(Icons.devices_rounded, color: _green, size: 25),
-                  SizedBox(height: 12),
+                  const Icon(Icons.devices_rounded, color: _green, size: 25),
+                  const SizedBox(height: 12),
                   Text(
-                    '一个工作台，陪伴每一块屏幕',
-                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                    _t('一个工作台，陪伴每一块屏幕', 'One workspace, every screen'),
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
-                  SizedBox(height: 9),
+                  const SizedBox(height: 9),
                   Text(
-                    'iOS · Android · Windows · macOS · Linux · Web\n项目数据保存在当前设备，各端暂不自动同步。卸载应用或清理浏览器数据前，请保存需要保留的语言包。',
-                    style: TextStyle(fontSize: 12, color: _muted, height: 1.9),
+                    _t(
+                      'iOS · Android · Windows · macOS · Linux · Web\n项目数据保存在当前设备，各端暂不自动同步。卸载应用或清理浏览器数据前，请保存需要保留的语言包。',
+                      'iOS · Android · Windows · macOS · Linux · Web\nProject data stays on this device and does not sync across platforms. Save any language packs you need before uninstalling the app or clearing browser data.',
+                    ),
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: _muted,
+                      height: 1.9,
+                    ),
                   ),
                 ],
               ),

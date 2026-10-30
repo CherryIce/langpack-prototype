@@ -336,3 +336,16 @@ test('expanded word-based target scripts keep a separator at chunk boundaries in
     assert.equal((await client.translate(source, locale)).text, text + text);
   }
 });
+
+test('English source uses en to Simplified Chinese direction and keeps source directions separate in cache', async () => {
+  const pairs = [];
+  const client = M.createClient(options({ fetchImpl: async url => {
+    pairs.push(new URL(url).searchParams.get('langpair'));
+    return response('translated');
+  } }));
+  await client.translate('Welcome', 'zh-Hans', { sourceLocale: 'en' });
+  await client.translate('Welcome', 'ja', { sourceLocale: 'en' });
+  await client.translate('Welcome', 'ja');
+  assert.deepEqual(pairs, ['en|zh-CN', 'en|ja', 'zh-CN|ja']);
+  await assert.rejects(client.translate('Welcome', 'en', { sourceLocale: 'en' }), { code: 'LANGUAGE' });
+});

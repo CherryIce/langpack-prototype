@@ -88,6 +88,7 @@ final _quotaMessage = RegExp(
   caseSensitive: false,
 );
 const _languageMap = {
+  'zh-Hans': 'zh-CN',
   'en': 'en',
   'ja': 'ja',
   'ko': 'ko',
@@ -333,6 +334,7 @@ class TranslationService {
     'Google' => locale != 'nb',
     'Baidu' => !['pt-BR', 'pt-PT'].contains(locale),
     'Tencent' => const [
+      'zh-Hans',
       'zh-Hant',
       'en',
       'ms',
@@ -566,10 +568,11 @@ class TranslationService {
   Future<String> _primaryChunk(
     String source,
     String locale,
+    String sourceLocale,
     String email,
     _Run run,
   ) async {
-    final key = 'primary\u0000$locale\u0000$source';
+    final key = 'primary\u0000$sourceLocale\u0000$locale\u0000$source';
     final cached = run.bypassCache ? null : _cached(key);
     if (cached != null) return cached;
     for (var attempt = 0; ; attempt++) {
@@ -578,7 +581,8 @@ class TranslationService {
         final result = await _limited(run.token, () async {
           final query = {
             'q': source,
-            'langpair': 'zh-CN|${_languageMap[locale]}',
+            'langpair':
+                '${sourceLocale == 'en' ? 'en' : 'zh-CN'}|${_languageMap[locale]}',
             'mt': '1',
             if (email.isNotEmpty) 'de': email,
           };
@@ -687,6 +691,7 @@ class TranslationService {
   Future<String> _primary(
     String source,
     String locale,
+    String sourceLocale,
     String email,
     _Run run,
   ) async {
@@ -716,10 +721,10 @@ class TranslationService {
         }
         run.status('MyMemory · 翻译中');
         final text =
-            '${match[1]}${await _primaryChunk(core, locale, email, run)}${match[3]}';
+            '${match[1]}${await _primaryChunk(core, locale, sourceLocale, email, run)}${match[3]}';
         final tail = output.toString();
         if (previousTranslated &&
-            !['zh-Hant', 'ja', 'th'].contains(locale) &&
+            !['zh-Hans', 'zh-Hant', 'ja', 'th'].contains(locale) &&
             RegExp(
               r'''[\p{L}\p{M}\p{N}.!?;:)"']$''',
               unicode: true,
@@ -793,11 +798,13 @@ class TranslationService {
   Future<String> _backup(
     String source,
     String locale,
+    String sourceLocale,
     String base,
     _Run run,
   ) async {
     final endpoint = _endpoint(base, '/api/translation/backup');
-    final key = 'backup\u0000${endpoint.origin}\u0000$locale\u0000$source';
+    final key =
+        'backup\u0000${endpoint.origin}\u0000$sourceLocale\u0000$locale\u0000$source';
     final cached = run.bypassCache ? null : _cached(key);
     if (cached != null) return cached;
     if (source.runes.length > 50000) {
@@ -809,7 +816,11 @@ class TranslationService {
     }
     final whitespace = RegExp(r'^(\s*)([\s\S]*?)(\s*)$').firstMatch(source)!;
     final protected = _Protected(whitespace[2]!, newlines: true);
-    final body = jsonEncode({'content': protected.text, 'locale': locale});
+    final body = jsonEncode({
+      'content': protected.text,
+      'locale': locale,
+      if (sourceLocale == 'en') 'sourceLocale': sourceLocale,
+    });
     if (utf8.encode(body).length > 256 * 1024) {
       throw const TranslationFailure(
         'BACKUP_TOO_LARGE',
@@ -976,6 +987,7 @@ class TranslationService {
     String provider,
     String source,
     String locale,
+    String sourceLocale,
     String base,
     _Run run, {
     String email = '',
@@ -1030,7 +1042,7 @@ class TranslationService {
         continue;
       }
       final cacheKey =
-          'provider\u0000$provider\u0000${endpoint.origin}\u0000$locale\u0000$core';
+          'provider\u0000$provider\u0000${endpoint.origin}\u0000$sourceLocale\u0000$locale\u0000$core';
       var translated = run.bypassCache ? null : _cached(cacheKey);
       var chunkModel = _providerModels[cacheKey];
       if (translated == null) {
@@ -1038,6 +1050,7 @@ class TranslationService {
           'provider': provider,
           'content': core,
           'locale': locale,
+          if (sourceLocale == 'en') 'sourceLocale': sourceLocale,
           'credentials': credentials,
         });
         if (utf8.encode(body).length > 256 * 1024) {
@@ -1134,6 +1147,7 @@ class TranslationService {
   Future<TranslationResult> _configuredTranslation(
     String source,
     String locale,
+    String sourceLocale,
     String email,
     String base,
     _Run run,
@@ -1172,13 +1186,14 @@ class TranslationService {
             provider == 'MyMemory' &&
                 (_credentials['MyMemory']?['apiKey'] ?? '').isEmpty
             ? TranslationResult(
-                text: await _primary(source, locale, email, run),
+                text: await _primary(source, locale, sourceLocale, email, run),
                 provider: provider,
               )
             : await _proxyProvider(
                 provider,
                 source,
                 locale,
+                sourceLocale,
                 base,
                 run,
                 email: email,
@@ -1230,13 +1245,17 @@ class TranslationService {
     String source,
     String locale, {
     required CancelToken token,
+    String sourceLocale = 'zh-Hans',
     String email = '',
     String apiBaseUrl = '',
     bool bypassCache = false,
     void Function(String)? onStatus,
   }) async {
     token.throwIfCancelled();
-    if (!supportedLanguages.any((language) => language.code == locale)) {
+    if (!sourceLocales.contains(sourceLocale) ||
+        !targetLanguagesFor(
+          sourceLocale,
+        ).any((language) => language.code == locale)) {
       throw const TranslationFailure('LANGUAGE', '不支持这个目标语言。');
     }
     email = email.trim();
@@ -1257,17 +1276,24 @@ class TranslationService {
     }
     final run = _Run(token, onStatus, bypassCache);
     if (_providerOrder != null) {
-      return _configuredTranslation(source, locale, email, apiBaseUrl, run);
+      return _configuredTranslation(
+        source,
+        locale,
+        sourceLocale,
+        email,
+        apiBaseUrl,
+        run,
+      );
     }
     var provider = 'MyMemory';
     String text;
     if (!_languageMap.containsKey(locale) ||
         _circuitUntil != null && _circuitUntil!.isAfter(_now())) {
       provider = 'ZTAITrans';
-      text = await _backup(source, locale, apiBaseUrl, run);
+      text = await _backup(source, locale, sourceLocale, apiBaseUrl, run);
     } else {
       try {
-        text = await _primary(source, locale, email, run);
+        text = await _primary(source, locale, sourceLocale, email, run);
       } on TranslationFailure catch (error) {
         token.throwIfCancelled();
         if (!error.quota) rethrow;
@@ -1279,7 +1305,7 @@ class TranslationService {
         );
         run.status('MyMemory 额度已用尽，整段切换至 ZTAITrans。');
         provider = 'ZTAITrans';
-        text = await _backup(source, locale, apiBaseUrl, run);
+        text = await _backup(source, locale, sourceLocale, apiBaseUrl, run);
       }
     }
     token.throwIfCancelled();

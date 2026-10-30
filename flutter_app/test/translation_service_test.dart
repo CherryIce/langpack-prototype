@@ -363,6 +363,38 @@ void main() {
   });
 
   test(
+    'English source translates to Simplified Chinese with the correct language pair',
+    () async {
+      late Uri observed;
+      final service = TranslationService(
+        client: MockClient((request) async {
+          observed = request.url;
+          return success('登录');
+        }),
+        minInterval: Duration.zero,
+      );
+      addTearDown(service.dispose);
+      final result = await service.translate(
+        'Sign in',
+        'zh-Hans',
+        sourceLocale: 'en',
+        token: CancelToken(),
+      );
+      expect(observed.queryParameters['langpair'], 'en|zh-CN');
+      expect(result.text, '登录');
+      await expectLater(
+        service.translate(
+          'Sign in',
+          'en',
+          sourceLocale: 'en',
+          token: CancelToken(),
+        ),
+        throwsA(failure('LANGUAGE')),
+      );
+    },
+  );
+
+  test(
     'preserves repeated placeholders, literal marker, newlines and outer whitespace',
     () async {
       final service = TranslationService(
@@ -699,6 +731,32 @@ void main() {
       expect(requests.length, 2);
     },
   );
+
+  test('English backup request carries the new source locale field', () async {
+    Map<String, dynamic>? body;
+    final service = TranslationService(
+      client: MockClient((request) async {
+        if (request.method == 'GET') return quota();
+        body = Map<String, dynamic>.from(jsonDecode(request.body) as Map);
+        return backup('登录');
+      }),
+      minInterval: Duration.zero,
+    );
+    addTearDown(service.dispose);
+    final result = await service.translate(
+      'Sign in',
+      'zh-Hans',
+      sourceLocale: 'en',
+      token: CancelToken(),
+      apiBaseUrl: 'https://backup.example',
+    );
+    expect(body, {
+      'content': 'Sign in',
+      'locale': 'zh-Hans',
+      'sourceLocale': 'en',
+    });
+    expect(result.text, '登录');
+  });
 
   test(
     'explicit custom proxy is retained instead of the built-in default',

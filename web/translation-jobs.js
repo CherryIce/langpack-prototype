@@ -73,11 +73,11 @@
     const counts = summary(job);
     Object.assign(job, { total: counts.total, processed: counts.processed, success: counts.success, failed: counts.failed, skipped: counts.skipped });
   }
-  function createJob({ id, projectId, projectName, entries, locales, memoryEntries = [], createdAt, provider = 'TranslationChain' }) {
+  function createJob({ id, projectId, projectName, entries, locales, sourceLocale = 'zh-Hans', memoryEntries = [], createdAt, provider = 'TranslationChain' }) {
     const active = (entries || []).filter(entry => entry.selected !== false);
     const targets = [...new Set(locales || [])];
     const job = {
-      id, projectId, projectName, entries: active, locales: targets,
+      id, projectId, projectName, entries: active, locales: targets, sourceLocale,
       provider: provider === 'TranslationChain' || providers.known(provider) ? provider : 'TranslationChain', count: active.length, status: 'pending',
       createdAt: createdAt || now(), activeItem: null,
       plan: plan({ entries: active, locales: targets, memoryEntries }),
@@ -166,6 +166,7 @@
           if (!owns()) return job;
           if (signal?.aborted) { abort(item); return job; }
           const result = await client.translate(item.source, item.locale, {
+            sourceLocale: job.sourceLocale === 'en' ? 'en' : 'zh-Hans',
             signal,
             onProgress: progress => {
               if (!owns() || signal?.aborted || item.status !== 'running' || job.activeItem !== activity) return;

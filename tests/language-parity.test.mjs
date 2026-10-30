@@ -8,11 +8,12 @@ const catalog = require('../web/languages.js');
 // Taken from MediaServiceClient's Language-*.json resource suffixes.
 const expected = ['zh-Hant', 'en', 'pt-BR', 'pt-PT', 'ms', 'th', 'fr', 'es', 'ar', 'fil', 'vi', 'ru', 'tr', 'id', 'ja', 'ko', 'de', 'hi', 'hu', 'it', 'ro', 'sv', 'bg', 'pl', 'da', 'fi', 'nl', 'cs', 'sk', 'uk', 'el', 'nb', 'hr', 'si'];
 
-test('Web and Flutter expose the same 35 resource languages with Chinese source-only', async () => {
+test('Web and Flutter expose matching Chinese and English source target catalogues', async () => {
   assert.equal(catalog.source.code, 'zh-Hans');
   assert.equal(catalog.all.length, 35);
   assert.deepEqual(catalog.targets.map(language => language.code), expected);
+  assert.deepEqual(catalog.targetsForSource('en').map(language => language.code), ['zh-Hans', ...expected.filter(code => code !== 'en')]);
   const dart = await readFile(new URL('../flutter_app/lib/models.dart', import.meta.url), 'utf8');
   const languages = [...dart.matchAll(/Language\('([^']+)'/g)].map(match => match[1]);
-  assert.deepEqual(languages, expected);
+  assert.deepEqual(languages, [...expected, 'zh-Hans']);
 });

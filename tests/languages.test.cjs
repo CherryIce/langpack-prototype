@@ -26,6 +26,19 @@ test('recent target normalization preserves canonical regions, filters source/un
   assert.deepEqual(Languages.normalizeTargets('en'), []);
 });
 
+test('English source offers Simplified Chinese as a target and exports the source as en.json', () => {
+  const targets = Languages.targetsForSource('en');
+  assert.equal(targets.length, 34);
+  assert.equal(targets.some(language => language.code === 'en'), false);
+  assert.equal(targets.some(language => language.code === 'zh-Hans'), true);
+  assert.deepEqual(Languages.normalizeTargets(['zh-hans', 'en', 'JA', 'zh-Hans'], 'en'), ['zh-Hans', 'ja']);
+  const entries = [{ id: 'one', key: 'welcome', source: 'Welcome', translations: { 'zh-Hans': '欢迎' } }];
+  const files = Engine.makePackages(entries, ['zh-Hans'], true, 'en');
+  assert.deepEqual(Object.keys(files), ['en.json', 'zh-Hans.json']);
+  assert.equal(JSON.parse(files['en.json']).welcome, 'Welcome');
+  assert.equal(JSON.parse(files['zh-Hans.json']).welcome, '欢迎');
+});
+
 test('new language exports use canonical file names and never invent demonstration translations', () => {
   assert.deepEqual(Engine.localeCodes, ['en', 'ja', 'ko', 'fr', 'de', 'es', 'zh-Hant']);
   for (const code of ['pt-BR', 'pt-PT', 'fil', 'nb', 'si']) assert.deepEqual(Engine.translate('登录', code), { text: '', demo: true, known: false });

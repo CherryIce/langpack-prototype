@@ -109,7 +109,7 @@
       cache.delete(key); cache.set(key, text);
       while (cache.size > maxCacheEntries) cache.delete(cache.keys().next().value);
     }
-    async function request(content, locale, signal, counts) {
+    async function request(content, locale, sourceLocale, signal, counts) {
       checkAbort(signal);
       const controller = new AbortController();
       let timedOut = false;
@@ -119,7 +119,7 @@
       const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
       counts.requestCount++;
       try {
-        const response = await withAbort(fetchImpl(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }, credentials: 'same-origin', cache: 'no-store', referrerPolicy: 'same-origin', body: JSON.stringify({ content, locale }), signal: controller.signal }), controller.signal);
+        const response = await withAbort(fetchImpl(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }, credentials: 'same-origin', cache: 'no-store', referrerPolicy: 'same-origin', body: JSON.stringify({ content, locale, ...(sourceLocale === 'en' ? { sourceLocale } : {}) }), signal: controller.signal }), controller.signal);
         let payload;
         try { payload = await withAbort(response.json(), controller.signal); }
         catch (error) { if (controller.signal.aborted) throw error; payload = null; }
@@ -141,9 +141,10 @@
     async function translate(value, locale, options = {}) {
       const source = String(value ?? '');
       checkAbort(options.signal);
-      if (!languages.targets.some(language => language.code === locale)) throw failure('LANGUAGE', '不支持这个目标语言。');
+      const sourceLocale = options.sourceLocale === 'en' ? 'en' : 'zh-Hans';
+      if (!languages.targetsForSource(sourceLocale).some(language => language.code === locale)) throw failure('LANGUAGE', '不支持这个目标语言。');
       if (!source.trim()) return { text: source, provider: PROVIDER, cached: true, requestCount: 0 };
-      const key = locale + '\0' + source;
+      const key = sourceLocale + '\0' + locale + '\0' + source;
       if (!options.bypassCache && cache.has(key)) {
         const text = cache.get(key); remember(key, text);
         notify(options.onProgress, { completed: 1, total: 1, requestCount: 0, provider: PROVIDER });
@@ -156,7 +157,7 @@
       for (let attempt = 0; ; attempt++) {
         checkAbort(options.signal);
         try {
-          const raw = await request(protectedSource.text, locale, options.signal, counts);
+          const raw = await request(protectedSource.text, locale, sourceLocale, options.signal, counts);
           checkAbort(options.signal);
           const text = prefix + restore(core, protectedSource, raw) + suffix;
           checkAbort(options.signal);
@@ -258,21 +259,22 @@
     const remember = (key, text) => { cache.delete(key); cache.set(key, text); while (cache.size > Math.max(1, maxCacheEntries)) cache.delete(cache.keys().next().value); };
     async function translate(value, locale, options = {}) {
       const source = String(value ?? ''); checkAbort(options.signal);
-      if (!languages.targets.some(language => language.code === locale)) throw providerFailure(provider, 'PROVIDER_UNSUPPORTED', '不支持这个目标语言。', { unsupported: true });
+      const sourceLocale = options.sourceLocale === 'en' ? 'en' : 'zh-Hans';
+      if (!languages.targetsForSource(sourceLocale).some(language => language.code === locale)) throw providerFailure(provider, 'PROVIDER_UNSUPPORTED', '不支持这个目标语言。', { unsupported: true });
       const credentials = providers.cleanCredentials(provider, getCredentials());
       if (!providers.configured(provider, credentials) || provider === 'MyMemory' && !credentials.apiKey) throw providerFailure(provider, 'PROVIDER_CONFIG', '请先在设置中填写这个平台的凭据。', { fatal: true });
       const revision = getRevision(); let requestCount = 0;
       const ensureCurrent = () => { checkAbort(options.signal); if (getRevision() !== revision) throw providerFailure(provider, 'PROVIDER_CONFIG', '平台配置已改变，请重新开始或继续任务。', { fatal: true }); };
       async function request(content, cacheScope) {
         ensureCurrent();
-        const key = JSON.stringify([provider, revision, locale, cacheScope, content]);
+        const key = JSON.stringify([provider, revision, sourceLocale, locale, cacheScope, content]);
         if (!options.bypassCache && cache.has(key)) { const text = cache.get(key); remember(key, text); return text; }
         for (let attempt = 0; ; attempt++) {
           ensureCurrent(); const controller = new AbortController(); let timedOut = false;
           const onAbort = () => controller.abort(); options.signal?.addEventListener('abort', onAbort, { once: true });
           const timer = setTimeout(() => { timedOut = true; controller.abort(); }, Math.max(1, timeoutMs));
           try {
-            const body = JSON.stringify({ provider, content, locale, credentials });
+            const body = JSON.stringify({ provider, content, locale, ...(sourceLocale === 'en' ? { sourceLocale } : {}), credentials });
             if (new TextEncoder().encode(body).length > 256 * 1024) throw providerFailure(provider, 'PROVIDER_REQUEST', '翻译请求过大，请拆分原文。');
             requestCount++;
             const response = await withAbort(fetchImpl('/api/translation/provider', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store', referrerPolicy: 'no-referrer', body, signal: controller.signal }), controller.signal);
@@ -331,11 +333,12 @@
     const selected = providers.normalizeOrder(order);
     async function translate(source, locale, options = {}) {
       checkAbort(options.signal);
-      if (!languages.targets.some(language => language.code === locale)) throw failure('PROVIDER_UNSUPPORTED', '不支持这个目标语言。', { unsupported: true });
+      const sourceLocale = options.sourceLocale === 'en' ? 'en' : 'zh-Hans';
+      if (!languages.targetsForSource(sourceLocale).some(language => language.code === locale)) throw failure('PROVIDER_UNSUPPORTED', '不支持这个目标语言。', { unsupported: true });
       let lastError, previous;
       for (const provider of (fallback ? selected : selected.slice(0, 1))) {
         checkAbort(options.signal);
-        if (!providers.supports(provider, locale)) { lastError = providerFailure(provider, 'PROVIDER_UNSUPPORTED', '这个平台不支持所选目标语言。', { unsupported: true }); previous = { from: provider, reason: 'unsupported' }; continue; }
+        if (!providers.supports(provider, locale, sourceLocale)) { lastError = providerFailure(provider, 'PROVIDER_UNSUPPORTED', '这个平台不支持所选目标语言。', { unsupported: true }); previous = { from: provider, reason: 'unsupported' }; continue; }
         const circuit = circuits[provider] ||= { until: 0 };
         if (Number(circuit.until) > now()) { lastError = providerFailure(provider, 'PROVIDER_QUOTA', '这个平台的额度尚未恢复。', { quota: true, retryAfterMs: circuit.until - now() }); previous = { from: provider, reason: 'quota', until: circuit.until }; continue; }
         if (!clients[provider]?.translate) throw providerFailure(provider, 'PROVIDER_CONFIG', '请先配置所选平台。', { fatal: true });

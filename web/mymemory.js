@@ -7,7 +7,7 @@
 })(typeof window !== 'undefined' ? window : globalThis, function (languages) {
   'use strict';
   const ENDPOINT = 'https://api.mymemory.translated.net/get';
-  const LANGUAGES = languages.primaryMap;
+  const LANGUAGES = Object.freeze({ ...languages.primaryMap, 'zh-Hans': 'zh-CN' });
   const encoder = new TextEncoder();
   const placeholderPattern = () => /\{\{\s*[\w.]+\s*\}\}|\{[\w.]+\}|%(?:\d+\$)?[-+#0 ']*(?:\d+|\*)?(?:\.(?:\d+|\*))?[sdif@uoxXegGc]|%%/g;
   const utf8Length = text => encoder.encode(String(text)).length;
@@ -158,7 +158,7 @@
       context.signal?.addEventListener('abort', onAbort, { once: true });
       if (context.signal?.aborted) controller.abort();
       const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
-      const query = new URLSearchParams({ q: source, langpair: 'zh-CN|' + LANGUAGES[locale], mt: '1' });
+      const query = new URLSearchParams({ q: source, langpair: (context.sourceLocale === 'en' ? 'en' : 'zh-CN') + '|' + LANGUAGES[locale], mt: '1' });
       if (email) query.set('de', email);
       usage.requestCount++; usage.characters += Array.from(source).length; usage.bytes += utf8Length(source); context.requestCount++;
       try {
@@ -196,7 +196,7 @@
       } finally { clearTimeout(timer); context.signal?.removeEventListener('abort', onAbort); }
     }
     async function chunk(source, locale, context) {
-      const key = locale + '\0' + source;
+      const key = context.sourceLocale + '\0' + locale + '\0' + source;
       if (!context.bypassCache) {
         const cached = cacheGet(key);
         if (cached !== undefined) return cached;
@@ -220,7 +220,8 @@
     async function translate(value, locale, translationOptions = {}) {
       const source = String(value ?? '');
       throwIfAborted(translationOptions.signal);
-      if (!Object.hasOwn(LANGUAGES, locale)) throw error('LANGUAGE', '不支持这个目标语言。');
+      const sourceLocale = translationOptions.sourceLocale === 'en' ? 'en' : 'zh-Hans';
+      if (locale === sourceLocale || !Object.hasOwn(LANGUAGES, locale)) throw error('LANGUAGE', '不支持这个目标语言。');
       if (!source.trim()) return { text: source, provider: 'MyMemory', cached: true, requestCount: 0 };
       const protectedSource = protect(source);
       const parts = [];
@@ -235,7 +236,7 @@
           else parts.push({ prefix: match[1], source: core, suffix: match[3] });
         }
       }
-      const context = { ...translationOptions, requestCount: 0, chunkIndex: 0, chunkCount: parts.filter(part => part.source).length };
+      const context = { ...translationOptions, sourceLocale, requestCount: 0, chunkIndex: 0, chunkCount: parts.filter(part => part.source).length };
       notify(context.onProgress, { completed: 0, total: context.chunkCount, requestCount: 0 });
       const output = [];
       let previousWasTranslated = false;

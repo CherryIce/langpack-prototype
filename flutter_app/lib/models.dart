@@ -136,6 +136,14 @@ const supportedLanguages = <Language>[
   Language('si', '僧伽罗语', 'සිංහල', 'SI'),
 ];
 
+const sourceLocales = {'zh-Hans', 'en'};
+const simplifiedChinese = Language('zh-Hans', '简体中文', '简体中文', '简');
+
+List<Language> targetLanguagesFor(String sourceLocale) => [
+  if (sourceLocale == 'en') simplifiedChinese,
+  ...supportedLanguages.where((language) => language.code != sourceLocale),
+];
+
 class Language {
   const Language(this.code, this.name, this.nativeName, this.badge);
   final String code;
@@ -144,16 +152,32 @@ class Language {
   final String badge;
 }
 
-String languageName(String code) => supportedLanguages
+String languageName(String code) => [simplifiedChinese, ...supportedLanguages]
     .firstWhere(
       (language) => language.code == code,
       orElse: () => Language(code, code, code, code),
     )
     .name;
 
-List<String> normalizeTargetLocales(Iterable<dynamic> codes) {
+List<String> normalizeTargetLocales(
+  Iterable<dynamic> codes, {
+  String sourceLocale = 'zh-Hans',
+}) {
   final canonical = {
-    for (final language in supportedLanguages)
+    for (final language in targetLanguagesFor(sourceLocale))
+      language.code.toLowerCase(): language.code,
+  };
+  return codes
+      .whereType<String>()
+      .map((code) => canonical[code.trim().toLowerCase()])
+      .whereType<String>()
+      .toSet()
+      .toList();
+}
+
+List<String> normalizeRecentLocales(Iterable<dynamic> codes) {
+  final canonical = {
+    for (final language in [simplifiedChinese, ...supportedLanguages])
       language.code.toLowerCase(): language.code,
   };
   return codes
@@ -321,6 +345,7 @@ class Project {
   Project({
     String? id,
     required this.name,
+    this.sourceLocale = 'zh-Hans',
     this.description = '',
     List<Entry>? entries,
     List<String>? locales,
@@ -329,12 +354,16 @@ class Project {
     DateTime? updatedAt,
   }) : id = id ?? newId(),
        entries = entries ?? [],
-       locales = locales ?? ['en', 'ja'],
+       locales = normalizeTargetLocales(
+         locales ?? (sourceLocale == 'en' ? ['zh-Hans', 'ja'] : ['en', 'ja']),
+         sourceLocale: sourceLocale,
+       ),
        exports = exports ?? [],
        jobs = jobs ?? [],
        updatedAt = updatedAt ?? DateTime.now();
   final String id;
   String name;
+  final String sourceLocale;
   String description;
   final List<Entry> entries;
   final List<String> locales;
@@ -358,6 +387,7 @@ class Project {
   Map<String, dynamic> toJson() => {
     'id': id,
     'name': name,
+    'sourceLocale': sourceLocale,
     'description': description,
     'entries': entries.map((entry) => entry.toJson()).toList(),
     'locales': locales,
@@ -368,17 +398,14 @@ class Project {
   factory Project.fromJson(Map<String, dynamic> data) => Project(
     id: data['id'] as String?,
     name: data['name'] as String? ?? '未命名项目',
+    sourceLocale: sourceLocales.contains(data['sourceLocale'])
+        ? data['sourceLocale'] as String
+        : 'zh-Hans',
     description: data['description'] as String? ?? '',
     entries: (data['entries'] as List? ?? [])
         .map((entry) => Entry.fromJson(Map<String, dynamic>.from(entry as Map)))
         .toList(),
-    locales: (data['locales'] as List? ?? ['en', 'ja'])
-        .cast<String>()
-        .where(
-          (code) => supportedLanguages.any((language) => language.code == code),
-        )
-        .toSet()
-        .toList(),
+    locales: (data['locales'] as List?)?.whereType<String>().toList(),
     exports: (data['exports'] as List? ?? [])
         .take(20)
         .map(
@@ -410,7 +437,7 @@ class TaskRecord {
     List<String>? locales,
     this.batch = true,
   }) : id = id ?? newId(),
-       locales = normalizeTargetLocales(locales ?? const <String>[]),
+       locales = normalizeRecentLocales(locales ?? const <String>[]),
        createdAt = createdAt ?? DateTime.now();
   final String id;
   final DateTime createdAt;
@@ -445,7 +472,7 @@ class TaskRecord {
     failed: data['failed'] as int? ?? 0,
     provider: data['provider'] as String? ?? '',
     reused: data['reused'] as int? ?? 0,
-    locales: normalizeTargetLocales(
+    locales: normalizeRecentLocales(
       data['locales'] is List ? data['locales'] as List : const [],
     ),
     batch: data['batch'] != false,
@@ -467,14 +494,16 @@ class AppSettings {
     this.email = '',
     this.apiBaseUrl = const String.fromEnvironment('API_BASE_URL'),
     this.includeSource = true,
+    this.interfaceLocale = 'zh',
     Iterable<dynamic> recentLocales = const [],
     Iterable<dynamic> providerOrder = const ['MyMemory'],
     this.providerFallback = true,
-  }) : recentLocales = normalizeTargetLocales(recentLocales),
+  }) : recentLocales = normalizeRecentLocales(recentLocales),
        providerOrder = normalizeProviderOrder(providerOrder);
   String email;
   String apiBaseUrl;
   bool includeSource;
+  String interfaceLocale;
   final List<String> recentLocales;
   final List<String> providerOrder;
   bool providerFallback;
@@ -482,7 +511,8 @@ class AppSettings {
     'email': email,
     'apiBaseUrl': apiBaseUrl,
     'includeSource': includeSource,
-    'recentLocales': normalizeTargetLocales(recentLocales),
+    'interfaceLocale': interfaceLocale,
+    'recentLocales': normalizeRecentLocales(recentLocales),
     'providerOrder': normalizeProviderOrder(providerOrder),
     'providerFallback': providerFallback,
   };
@@ -492,6 +522,7 @@ class AppSettings {
         data['apiBaseUrl'] as String? ??
         const String.fromEnvironment('API_BASE_URL'),
     includeSource: data['includeSource'] != false,
+    interfaceLocale: data['interfaceLocale'] == 'en' ? 'en' : 'zh',
     recentLocales: data['recentLocales'] is List
         ? data['recentLocales'] as List
         : const [],

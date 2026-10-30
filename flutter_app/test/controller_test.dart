@@ -11,12 +11,14 @@ class ControlledTranslator extends TranslationService {
   final requests = <Completer<TranslationResult>>[];
   final sources = <String>[];
   final locales = <String>[];
+  final sourceLocales = <String>[];
   final bypasses = <bool>[];
   @override
   Future<TranslationResult> translate(
     String source,
     String locale, {
     required CancelToken token,
+    String sourceLocale = 'zh-Hans',
     String email = '',
     String apiBaseUrl = '',
     bool bypassCache = false,
@@ -24,6 +26,7 @@ class ControlledTranslator extends TranslationService {
   }) {
     sources.add(source);
     locales.add(locale);
+    sourceLocales.add(sourceLocale);
     bypasses.add(bypassCache);
     final request = Completer<TranslationResult>();
     requests.add(request);
@@ -52,6 +55,35 @@ void main() {
     await controller.flush();
     controller.dispose();
   });
+
+  test(
+    'English interface creates an English-source project and keeps old projects Chinese',
+    () async {
+      controller.setInterfaceLocale('en');
+      final english = controller.createProject('English project');
+      expect(english.sourceLocale, 'en');
+      expect(english.locales, ['zh-Hans', 'ja']);
+      controller.setLocales(['en', 'zh-Hans']);
+      expect(english.locales, ['zh-Hans']);
+      controller.addBlocks([DocumentBlock('Sign in')]);
+      final task = controller.startTranslation();
+      expect(translator.sources, ['Sign in']);
+      expect(translator.locales, ['zh-Hans']);
+      expect(translator.sourceLocales, ['en']);
+      translator.complete(0, '登录');
+      await task;
+      expect(controller.previewPackages().keys, ['en.json', 'zh-Hans.json']);
+      expect(controller.previewPackages()['en.json'], contains('Sign in'));
+      expect(controller.previewPackages()['zh-Hans.json'], contains('登录'));
+      await controller.flush();
+      final restored = AppController();
+      await restored.initialize();
+      expect(restored.settings.interfaceLocale, 'en');
+      expect(restored.projects.first.sourceLocale, 'en');
+      expect(restored.projects.last.sourceLocale, 'zh-Hans');
+      restored.dispose();
+    },
+  );
 
   test(
     'single retranslation cannot narrow a paused batch continuation',
@@ -298,7 +330,7 @@ void main() {
   );
 
   test(
-    'stored preferences filter source unknown duplicate and non-string values',
+    'stored preferences retain either source target and filter invalid values',
     () {
       expect(supportedLanguages.length, 34);
       expect(
@@ -321,7 +353,7 @@ void main() {
           'pt-br',
         ],
       });
-      expect(settings.recentLocales, ['fil', 'nb', 'si', 'pt-BR']);
+      expect(settings.recentLocales, ['zh-Hans', 'fil', 'nb', 'si', 'pt-BR']);
       expect(
         AppSettings.fromJson({'recentLocales': 'invalid'}).recentLocales,
         isEmpty,
@@ -330,6 +362,7 @@ void main() {
         'name': 'Legacy',
         'locales': ['en', 'ja'],
       });
+      expect(legacy.sourceLocale, 'zh-Hans');
       expect(legacy.locales, ['en', 'ja']);
     },
   );

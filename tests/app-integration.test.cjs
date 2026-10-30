@@ -123,6 +123,120 @@ test('v1 startup preserves projects, manual translations and export snapshots; s
   assert.deepEqual(app.errors, []);
 });
 
+test('switching interface language keeps an existing Chinese project in Chinese source mode', async t => {
+  const app = boot(fixture(['en'])); t.after(() => app.close());
+  await app.click('toggle-ui-locale');
+  const saved = app.state();
+  assert.equal(saved.settings.uiLocale, 'en');
+  assert.equal(saved.projects[0].sourceLocale, 'zh-Hans');
+  assert.equal(saved.session.sourceLocale, 'zh-Hans');
+  assert.match(app.html(), /Chinese source/);
+  assert.match(app.html(), /data-locale="en"/);
+  assert.doesNotMatch(app.html(), /data-locale="zh-Hans"/);
+  await app.click('quick-start');
+  assert.match(app.content('modal'), /id="project-source"/);
+  assert.equal(app.state().session.sourceLocale, 'zh-Hans');
+  await app.click('nav', { view: 'input' });
+  assert.match(app.html(), /添加你的中文文案/);
+});
+
+test('English project accepts English source, offers Chinese target and exports en.json as source', async t => {
+  const calls = [];
+  const app = boot(fixture(['en']), async (source, locale, options) => {
+    calls.push([source, locale, options.sourceLocale]);
+    return { text: locale === 'zh-Hans' ? '欢迎回来' : 'Welcome back', provider: 'MyMemory' };
+  });
+  t.after(() => app.close());
+  await app.click('toggle-ui-locale');
+  await app.click('new-project');
+  app.field('project-name', 'English App'); app.field('project-source', 'en');
+  await app.click('create-project');
+  assert.equal(app.state().session.sourceLocale, 'en');
+  assert.match(app.html(), /English source/);
+  await app.click('fill-example');
+  assert.equal(app.state().session.entries[0].source, 'Log in');
+  await app.click('to-languages');
+  assert.match(app.html(), /data-locale="zh-Hans"/);
+  assert.doesNotMatch(app.html(), /data-locale="en"/);
+  await app.change({ dataset: { locale: 'zh-Hans' }, checked: true });
+  await app.click('start-translation');
+  await until(() => app.state().session.status === 'completed');
+  assert.ok(calls.length > 0);
+  assert.ok(calls.every(([, locale, sourceLocale]) => locale !== 'en' && sourceLocale === 'en'));
+  const saved = app.state();
+  assert.equal(saved.jobs[0].sourceLocale, 'en');
+  const project = saved.projects.find(item => item.name === 'English App');
+  assert.equal(project.sourceLocale, 'en');
+  const files = app.engine.makePackages(project.entries, project.locales, true, project.sourceLocale);
+  assert.equal(JSON.parse(files['en.json']).log_in, 'Log in');
+  assert.equal(JSON.parse(files['zh-Hans.json']).log_in, '欢迎回来');
+  await app.click('project', { id: 'a' });
+  assert.match(app.html(), /Chinese source/);
+  await app.click('add-content');
+  assert.equal(app.state().session.sourceLocale, 'zh-Hans');
+});
+
+test('English interface renders running and quota states, provider errors, counts, and review heading in English', async t => {
+  const saved = fixture(['en']);
+  saved.settings.uiLocale = 'en';
+  saved.settings.providerOrder = ['MyMemory'];
+  saved.settings.providerFallback = false;
+  const pending = deferred();
+  const app = boot(saved, () => pending.promise); t.after(() => app.close());
+  assert.match(app.html(), />translation<\/span>/);
+  assert.doesNotMatch(app.html(), />translations<\/span>/);
+  await app.click('start-translation');
+  await until(() => app.state().session.status === 'running');
+  assert.match(app.html(), /Translating with MyMemory/);
+  assert.match(app.html(), /0 \/ 1 processed/);
+  pending.reject(Object.assign(new Error('MyMemory 今日免费额度已用尽。已完成的译文已保留，请等待额度恢复后重试。'), { code: 'QUOTA', provider: 'MyMemory', quota: true }));
+  await until(() => app.state().session.status === 'quota');
+  assert.match(app.html(), /MyMemory quota unavailable/);
+  assert.match(app.html(), /Completed translations are retained\. Remaining items will not be sent\./);
+  assert.match(app.html(), /1 \/ 1 processed/);
+  assert.match(app.html(), /1 failure/);
+  assert.match(app.html(), /MyMemory’s daily free quota is exhausted/);
+  assert.doesNotMatch(app.html(), /额度暂不可用|已完成的译文会保留|已处理|今日免费额度已用尽/);
+  await app.click('nav', { view: 'tasks' });
+  assert.match(app.html(), /1 string · English · 0 succeeded \/ 1 failed/);
+  assert.doesNotMatch(app.html(), /1 strings/);
+  await app.click('open-job', { id: app.state().jobs[0].id });
+  await app.click('to-review');
+  assert.match(app.html(), /<h3>String 01<\/h3>/);
+});
+
+test('English project and export pages label source, counts, status, and preview controls in English', async t => {
+  const saved = fixture(['zh-Hans']);
+  saved.settings.uiLocale = 'en';
+  saved.view = 'project';
+  saved.projects[0].sourceLocale = 'en';
+  saved.projects[0].entries = [makeEntry('one', 'Welcome')];
+  const app = boot(saved); t.after(() => app.close());
+  assert.match(app.html(), /<div class="brand-title">LangPack<\/div>/);
+  assert.match(app.html(), /English source \/ Semantic key/);
+  assert.match(app.html(), /<th>Status<\/th>/);
+  assert.match(app.html(), />string<\/span>/);
+  assert.match(app.html(), />language<\/span>/);
+  await app.click('export-project');
+  assert.match(app.html(), /<span class="badge ok">1 key<\/span>/);
+  assert.match(app.html(), /aria-label="Preview language pack"/);
+  assert.match(app.html(), /Download current en\.json/);
+  assert.match(app.html(), /UTF-8 · 1 key ·/);
+  assert.doesNotMatch(app.html(), /预览语言包|下载当前 en\.json|1 keys/);
+});
+
+test('mixed-source recent targets survive reload and filter only when a project starts', async t => {
+  const saved = fixture(['en']);
+  saved.settings.recentLocales = ['EN', 'zh-hans', 'EN'];
+  saved.projects.push({ id: 'english', name: 'English', sourceLocale: 'en', description: '', locales: ['zh-Hans'], entries: [], updatedAt: date });
+  const app = boot(saved); t.after(() => app.close());
+  assert.deepEqual(app.state().settings.recentLocales, ['en', 'zh-Hans']);
+  await app.click('project', { id: 'a' }); await app.click('add-content');
+  assert.deepEqual(app.state().session.locales, ['en']);
+  await app.click('project', { id: 'english' }); await app.click('add-content');
+  assert.deepEqual(app.state().session.locales, ['zh-Hans']);
+});
+
 test('event-driven batch persists successful results, failures and retry-only-failed lifecycle', async t => {
   const calls = []; let fail = true;
   const app = boot(fixture(), async (source, locale) => {
@@ -461,7 +575,7 @@ test('review, export, reopening old jobs and saving settings preserve preference
   row.translations = { en: 'Manual English', ja: '手動日本語' }; row.edited = { en: true, ja: true }; row.reviewed = { en: true, ja: true };
   saved.jobs = [Jobs.createJob({ id: 'historic', projectId: 'a', projectName: '旧任务', entries: [clone(row)], locales: ['ja'] })]; saved.jobs[0].status = 'completed';
   const app = boot(saved); t.after(() => app.close());
-  const expected = ['si', 'pt-BR'];
+  const expected = ['si', 'pt-BR', 'zh-Hans'];
   assert.deepEqual(app.state().settings.recentLocales, expected);
   await app.click('review-project'); assert.deepEqual(app.state().session.locales, ['en', 'ja']);
   app.field('review-key', 'key_one'); app.field('review-text', 'Manual English');

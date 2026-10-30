@@ -46,11 +46,15 @@
   // MyMemory's published choices do not distinguish these exact resource languages.
   const backupOnly = Object.freeze(['pt-BR', 'fil', 'nb']);
   const targets = Object.freeze(rows.map(([code, name, native, label, primary = code]) => Object.freeze({ code, name, native, label, primary: backupOnly.includes(code) ? null : primary, backupOnly: backupOnly.includes(code) })));
-  const canonical = new Map(targets.map(language => [language.code.toLowerCase(), language.code]));
-  function normalizeTargets(values) {
-    return [...new Set((Array.isArray(values) ? values : []).map(code => typeof code === 'string' ? canonical.get(code.trim().toLowerCase()) : undefined).filter(Boolean))];
+  const canonical = new Map([source, ...targets].map(language => [language.code.toLowerCase(), language.code]));
+  const sourceCodes = Object.freeze(['zh-Hans', 'en']);
+  const sourceFor = code => code === 'en' ? targets.find(language => language.code === 'en') : source;
+  const targetsForSource = code => code === 'en' ? Object.freeze([source, ...targets.filter(language => language.code !== 'en')]) : targets;
+  function normalizeTargets(values, sourceLocale = 'zh-Hans') {
+    const allowed = new Set(targetsForSource(sourceLocale).map(language => language.code));
+    return [...new Set((Array.isArray(values) ? values : []).map(code => typeof code === 'string' ? canonical.get(code.trim().toLowerCase()) : undefined).filter(code => allowed.has(code)))];
   }
   const primaryMap = Object.freeze(Object.fromEntries(targets.filter(language => !language.backupOnly).map(language => [language.code, language.primary])));
   const wordSpaced = Object.freeze(targets.filter(language => !['zh-Hant', 'ja', 'th'].includes(language.code)).map(language => language.code));
-  return Object.freeze({ source, targets, all: Object.freeze([source, ...targets]), primaryMap, backupOnly, wordSpaced, normalizeTargets });
+  return Object.freeze({ source, targets, all: Object.freeze([source, ...targets]), sourceCodes, sourceFor, targetsForSource, primaryMap, backupOnly, wordSpaced, normalizeTargets });
 });

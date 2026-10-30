@@ -130,14 +130,25 @@ class AppController extends ChangeNotifier {
     return _saveQueue;
   }
 
-  Project createProject(String name, {String description = ''}) {
+  Project createProject(
+    String name, {
+    String description = '',
+    String? sourceLocale,
+  }) {
     if (name.trim().isEmpty) throw ArgumentError('请输入项目名称。');
+    sourceLocale ??= settings.interfaceLocale == 'en' ? 'en' : 'zh-Hans';
+    if (!sourceLocales.contains(sourceLocale)) {
+      throw ArgumentError('不支持这个源语言。');
+    }
+    final recent = normalizeTargetLocales(
+      settings.recentLocales,
+      sourceLocale: sourceLocale,
+    );
     final p = Project(
       name: name.trim(),
+      sourceLocale: sourceLocale,
       description: description.trim(),
-      locales: settings.recentLocales.isEmpty
-          ? null
-          : [...settings.recentLocales],
+      locales: recent.isEmpty ? null : recent,
     );
     projects.insert(0, p);
     currentProject = p;
@@ -187,7 +198,12 @@ class AppController extends ChangeNotifier {
     if (running && activeProjectId == currentProject!.id) pauseTranslation();
     currentProject!.locales
       ..clear()
-      ..addAll(normalizeTargetLocales(codes));
+      ..addAll(
+        normalizeTargetLocales(
+          codes,
+          sourceLocale: currentProject!.sourceLocale,
+        ),
+      );
     _batchProjectId = null;
     _batchLocales = null;
     _changed();
@@ -207,13 +223,19 @@ class AppController extends ChangeNotifier {
   void setBatchLocales(List<String> codes) {
     if (currentProject == null || running) return;
     _batchProjectId = currentProject!.id;
-    _batchLocales = normalizeTargetLocales(codes);
+    _batchLocales = normalizeTargetLocales(
+      codes,
+      sourceLocale: currentProject!.sourceLocale,
+    );
     _notify();
   }
 
   void applyRecentLocales() {
-    final recent = normalizeTargetLocales(settings.recentLocales);
     if (currentProject == null) return;
+    final recent = normalizeTargetLocales(
+      settings.recentLocales,
+      sourceLocale: currentProject!.sourceLocale,
+    );
     setBatchLocales(recent.isEmpty ? currentProject!.locales : recent);
   }
 
@@ -420,6 +442,7 @@ class AppController extends ChangeNotifier {
           : isContinuation
           ? continuationLocales
           : batchLocales,
+      sourceLocale: p.sourceLocale,
     );
     final targetEntries = p.selectedEntries
         .where((entry) => entryId == null || entry.id == entryId)
@@ -548,6 +571,7 @@ class AppController extends ChangeNotifier {
                   ? await _translator.translate(
                       item.source,
                       item.locale,
+                      sourceLocale: p.sourceLocale,
                       token: token,
                       email: settings.email,
                       apiBaseUrl: settings.apiBaseUrl,
@@ -792,6 +816,7 @@ class AppController extends ChangeNotifier {
       email: cleanEmail,
       apiBaseUrl: cleanBase,
       includeSource: includeSource,
+      interfaceLocale: settings.interfaceLocale,
       recentLocales: settings.recentLocales,
       providerOrder: settings.providerOrder,
       providerFallback: settings.providerFallback,
@@ -799,6 +824,13 @@ class AppController extends ChangeNotifier {
     message = '设置已保存。';
     _changed();
     await flush();
+  }
+
+  void setInterfaceLocale(String locale) {
+    if (locale != 'zh' && locale != 'en') return;
+    if (settings.interfaceLocale == locale) return;
+    settings.interfaceLocale = locale;
+    _changed();
   }
 
   void _configureTranslator() => _translator.setProviderConfiguration(

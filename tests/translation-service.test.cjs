@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createBackupClient, createClient } = require('../web/translation-service.js');
+const { createBackupClient, createClient, createProviderClient } = require('../web/translation-service.js');
 
 const reply = (text, status = 200, body) => ({ status, ok: status >= 200 && status < 300, headers: { get: () => null }, json: async () => body || { text, provider: 'ZTAITrans' } });
 const fail = (code, extra = {}) => Object.assign(new Error(code), { code, ...extra });
@@ -20,6 +20,25 @@ test('backup only calls a same-origin POST endpoint and never sends credentials 
   assert.throws(() => createBackupClient({ endpoint: 'https://example.com/secret' }), /同源/);
   assert.throws(() => createBackupClient({ endpoint: '//example.com/secret' }), /同源/);
   assert.throws(() => createBackupClient({ endpoint: '/\\example.com/secret' }), /同源/);
+});
+
+test('English source direction reaches backup and configured provider without sharing Chinese cache entries', async () => {
+  const backupBodies = [];
+  const backup = createBackupClient({ fetchImpl: async (_url, options) => {
+    backupBodies.push(JSON.parse(options.body));
+    return reply('欢迎');
+  } });
+  await backup.translate('Welcome', 'zh-Hans', { sourceLocale: 'en' });
+  assert.deepEqual(backupBodies[0], { content: 'Welcome', locale: 'zh-Hans', sourceLocale: 'en' });
+  const providerBodies = [];
+  const provider = createProviderClient({ provider: 'Google', getCredentials: () => ({ apiKey: 'private-test-key' }), fetchImpl: async (_url, options) => {
+    providerBodies.push(JSON.parse(options.body));
+    return reply('欢迎', 200, { text: '欢迎', provider: 'Google' });
+  } });
+  await provider.translate('Welcome', 'zh-Hans', { sourceLocale: 'en' });
+  assert.equal(providerBodies[0].sourceLocale, 'en');
+  assert.equal(providerBodies[0].locale, 'zh-Hans');
+  await assert.rejects(provider.translate('Welcome', 'en', { sourceLocale: 'en' }), { code: 'PROVIDER_UNSUPPORTED' });
 });
 
 test('placeholder occurrences, literal marker-like text, CRLF and outer whitespace survive a whole-paragraph request', async () => {

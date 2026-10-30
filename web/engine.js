@@ -272,7 +272,7 @@
     return matches.filter(item => item !== '%%').map(item => item.replace(/\s+/g, '')).sort();
   }
 
-  function validate(entries, locales) {
+  function validate(entries, locales, sourceLocale = 'zh-Hans') {
     const active = (entries || []).filter(entry => entry.selected !== false);
     const issues = [];
     const keys = new Set();
@@ -281,7 +281,7 @@
       if (!/^[a-z][a-z0-9_]{0,79}$/.test(entry.key || '')) add('key', 'key 需以小写英文字母开头，仅包含小写字母、数字和下划线，最多 80 个字符。');
       if (keys.has(entry.key)) add('duplicate', '存在重复 key：' + entry.key);
       keys.add(entry.key);
-      if (!String(entry.source || '').trim()) add('source', '中文原文不能为空。');
+      if (!String(entry.source || '').trim()) add('source', sourceLocale === 'en' ? 'English source text cannot be empty.' : '中文原文不能为空。');
       const expected = placeholders(entry.source);
       Array.from(new Set(locales || [])).forEach(locale => {
         const text = translationText(entry, locale);
@@ -300,7 +300,7 @@
     return issues;
   }
 
-  function makePackages(entries, locales, includeSource) {
+  function makePackages(entries, locales, includeSource, sourceLocale = 'zh-Hans') {
     const active = (entries || []).filter(entry => entry.selected !== false).slice().sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
     const keys = new Set();
     active.forEach(entry => {
@@ -308,12 +308,13 @@
       keys.add(entry.key);
     });
     const files = {};
-    const selected = Array.from(new Set(locales || []));
-    if (includeSource !== false && !selected.includes('zh-Hans')) selected.unshift('zh-Hans');
+    if (!['zh-Hans', 'en'].includes(sourceLocale)) throw new Error('源语言不受支持。');
+    const selected = Array.from(new Set(locales || [])).filter(locale => locale !== sourceLocale);
+    if (includeSource !== false) selected.unshift(sourceLocale);
     selected.forEach(locale => {
       if (!/^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/.test(locale)) throw new Error('语言标识不正确。');
       const values = Object.create(null);
-      active.forEach(entry => { values[entry.key] = locale === 'zh-Hans' ? entry.source : translationText(entry, locale); });
+      active.forEach(entry => { values[entry.key] = locale === sourceLocale ? entry.source : translationText(entry, locale); });
       files[locale + '.json'] = JSON.stringify(values, null, 2) + '\n';
     });
     return files;

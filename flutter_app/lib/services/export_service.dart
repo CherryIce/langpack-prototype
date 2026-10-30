@@ -21,7 +21,9 @@ class ExportService {
       issues.add(const ValidationIssue('请至少选择一种目标语言。', type: 'language'));
     }
     for (final locale in project.locales.toSet()) {
-      if (!supportedLanguages.any((language) => language.code == locale)) {
+      if (!targetLanguagesFor(
+        project.sourceLocale,
+      ).any((language) => language.code == locale)) {
         issues.add(
           ValidationIssue('目标语言不受支持：$locale', locale: locale, type: 'language'),
         );
@@ -35,7 +37,7 @@ class ExportService {
         issue('key 需以小写英文字母开头，仅包含小写字母、数字和下划线，最多 80 字符。', 'key');
       }
       if (!keys.add(entry.key)) issue('存在重复 key：${entry.key}', 'duplicate');
-      if (entry.source.trim().isEmpty) issue('中文原文不能为空。', 'source');
+      if (entry.source.trim().isEmpty) issue('原文不能为空。', 'source');
       final expected = _documents.placeholders(entry.source);
       for (final locale in project.locales.toSet()) {
         final value = entry.translations[locale];
@@ -87,12 +89,15 @@ class ExportService {
     final entries = project.selectedEntries.toList()
       ..sort((left, right) => left.key.compareTo(right.key));
     final files = <String, String>{};
-    final locales = <String>{if (includeSource) 'zh-Hans', ...project.locales};
+    final locales = <String>{
+      if (includeSource) project.sourceLocale,
+      ...project.locales,
+    };
     const encoder = JsonEncoder.withIndent('  ');
     for (final locale in locales) {
       final values = <String, String>{
         for (final entry in entries)
-          entry.key: locale == 'zh-Hans'
+          entry.key: locale == project.sourceLocale
               ? entry.source
               : entry.translations[locale]?.text ?? '',
       };

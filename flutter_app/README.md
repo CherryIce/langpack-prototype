@@ -31,6 +31,11 @@ iOS / macOS 需要 macOS、Xcode 和 CocoaPods；Android 需要 Android SDK、JD
 | DeepL | API key；按控制台选择免费接口 api-free 或标准接口 api | 不支持 fil、si，支持其余 32 种 |
 | Azure | API key，可选资源区域 | 34 种目标语言 |
 | Google | API key，Basic / v2 | 不支持 nb，支持其余 33 种 |
+| Baidu | App ID、Secret Key | 排除 pt-BR / pt-PT，支持其余 32 种；扩展语种可能需要企业尊享版 |
+| Tencent | Secret ID、Secret Key、区域（默认 ap-guangzhou） | 仅 zh-Hant / en / ms / th / fr / es / ar / vi / ru / tr / id / ja / ko / de / it，共 15 种 |
+| Alibaba | AccessKey ID、AccessKey Secret；固定 cn-hangzhou | 排除 pt-BR / pt-PT / nb / hr / uk，精确支持其余 29 种 |
+
+新增百度、腾讯、阿里云均通过同源代理向固定官方端点发起请求并完成签名，客户端不直连签名 API。所有平台的凭据完整性按各自必填字段判断；译文及模型字段若反射任何凭据 ID 或秘密字段，将拒绝保存。
 
 ZTAITrans 不再提供匿名共享授权；开发者访问码通过服务端验证后，才可使用部署者的授权。状态检测只读取 `/api/translation/status`，开发者模式使用 `X-LangPack-Developer-Token` 请求头，不消耗翻译额度。各平台翻译通过统一 `/api/translation/provider` 转发，密钥不写入客户端 URL、项目、任务或导出；MyMemory 配置私有词库 key 后也使用固定代理，仅匿名或邮箱模式直接访问其公开 GET 接口。
 
@@ -96,7 +101,7 @@ flutter run -d emulator-5554 --dart-define=API_BASE_URL=http://10.0.2.2:4180
 - 与 MediaServiceClient 对齐的 35 语言覆盖：简体中文作为源文，另有 34 种目标语言可搜索、多选和导出。巴西葡萄牙语与葡萄牙葡萄牙语分开，菲律宾语使用 `fil`、书面挪威语使用 `nb`、僧伽罗语使用 `si`。
 - 常见中文语义 key、自定义内容稳定备用 key 与手动修改；未接入语义命名模型。
 - MyMemory 真实翻译、480 UTF-8 字节分段、Unicode / 换行 / 占位符保护、限速与临时失败重试。
-- 按用户启用顺序在额度耗尽或语言不支持时切换；DeepL / Azure / Google 的长段落按不超过 4000 字符分段，MyMemory 私有词库代理按 480 UTF-8 字节分段，均不拆占位符并保留原换行；ZTAITrans 保留整段。保留实际来源及可选模型，不混合不同平台的段落片段。
+- 按用户启用顺序在额度耗尽或语言不支持时切换；DeepL / Azure / Google 的长段落按不超过 4000 字符分段，百度 / 腾讯 / 阿里云按不超过 1000 Unicode 码点分段（百度同时控制在 6000 UTF-8 字节内），MyMemory 私有词库代理按 480 UTF-8 字节分段，均不拆占位符并保留原换行与分段边界间隔；ZTAITrans 保留整段。保留实际来源及可选模型，不混合不同平台的段落片段。
 - 暂停 / 继续、失败项重试、逐条重译、人工校对确认；批量保护人工结果，拒绝迟到请求覆盖新编辑。
 - 默认增量翻译：同一项目按完整原文与目标语言复用已保存的成功机器译文，重复导入、重启和同批重复内容无需重复请求；新增语言只补齐该语言，修改原文只处理变化内容。语言选择页展示保留、复用和待翻译数量。
 - 正式导出校验 key、完整性和占位符；各语言独立 JSON、ZIP、带报告的草稿 ZIP、最近 20 次导出快照重下载。
@@ -104,6 +109,8 @@ flutter run -d emulator-5554 --dart-define=API_BASE_URL=http://10.0.2.2:4180
 文档最多 **10 MB / 1000 个内容块**，DOCX 正文解压最多 **20 MB**。不支持 PDF、扫描件、旧版 DOC、加密文档或复杂版式还原；导出仅包含文本资源。文档文件在本地解析；开始翻译后，所选原文会发送给对应服务。
 
 各平台免费额度、套餐和限流以账户控制台为准。DeepL 新注册 Developer 为总计 100 万字符，旧 Free 为每月 50 万；Azure F0 每月 200 万字符，到限停止；Google Basic 每月 50 万 NMT 字符抵扣，需结算账户，超额可能收费，请设置用量限额。ZTAITrans 不承诺免费或永久免费。应用不会因免费接口失败而自动换到付费接口。
+
+百度通用翻译当前标准版每月 5 万、高级版 100 万、尊享版 200 万字符，超额每百万字符 49 元；扩展语种可能需企业尊享权限，具体以[官方控制台与版本说明](https://fanyi-api.baidu.com/access/0)为准。腾讯文本翻译面向既有账户，免费资源包已停止新发，且[计划于 2027 年 10 月 1 日停用](https://cloud.tencent.com/announce/detail/2448)，不能承诺新用户可开通或领取免费资源。阿里云通用版[每主账号每月 100 万字符，子账号共享](https://help.aliyun.com/zh/machine-translation/product-overview/pricing-of-machine-translation-general-purpose-edition)，超额每百万字符 50 元。请在各平台设置用量限额，应用不会购买套餐或绕过账户限制。
 
 项目、校对、任务摘要、导出快照与设置保存在当前设备或浏览器，无账户、云同步或跨设备共享。Flutter 各端数据与旧版 `web/` 原型分别保存；旧版数据不自动迁移，新版需重新导入原文。删除应用 / 浏览器站点数据会移除记录，请及时导出需要保留的语言包。
 
@@ -124,7 +131,7 @@ flutter analyze
 flutter test
 ```
 
-`provider_service_test.dart`、`provider_controller_test.dart` 与 `widget_test.dart` 使用模拟响应验证多平台路由、凭据隔离、冷却恢复、分段、设置及增量复用，不调用真实接口。`live_smoke_test.dart` 默认关闭；只有明确开启 `RUN_LIVE_TRANSLATION` 或 `RUN_PUBLIC_PROXY_TEST` 时才可能调用真实服务并消耗额度。ZTAITrans 的真实备用流程还需通过受控运行环境提供 `LANGPACK_ZTAI_API_KEY` 或 `LANGPACK_DEVELOPER_TOKEN`，不能通过客户端构建参数嵌入密钥。没有凭据时不会运行真实备用用例。
+`provider_service_test.dart`、`provider_controller_test.dart`、`domestic_provider_test.dart`、`domestic_widget_test.dart` 与 `widget_test.dart` 使用模拟响应验证多平台路由、凭据隔离、冷却恢复、分段、设置及增量复用，不调用真实接口。`live_smoke_test.dart` 默认关闭；只有明确开启 `RUN_LIVE_TRANSLATION` 或 `RUN_PUBLIC_PROXY_TEST` 时才可能调用真实服务并消耗额度。ZTAITrans 的真实备用流程还需通过受控运行环境提供 `LANGPACK_ZTAI_API_KEY` 或 `LANGPACK_DEVELOPER_TOKEN`，不能通过客户端构建参数嵌入密钥。没有凭据时不会运行真实备用用例。
 
 在对应宿主机与工具链上执行：
 

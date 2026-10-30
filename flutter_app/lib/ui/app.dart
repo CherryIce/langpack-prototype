@@ -3554,14 +3554,22 @@ class _WorkspaceState extends State<_Workspace> {
   Widget _providerCard(String provider) {
     final order = c.settings.providerOrder;
     final index = order.indexOf(provider);
-    final configured = c.credentialsFor(provider).isNotEmpty;
+    final configured = providerCredentialsReady(
+      provider,
+      c.credentialsFor(provider),
+    );
+    final hasCredentialData = c.credentialsFor(provider).isNotEmpty;
     final description = switch (provider) {
       'MyMemory' => '可匿名使用；联系邮箱与私有词库密钥可选。支持 31 种目标语言；私有词库密钥不代表额度增加。',
       'ZTAITrans' => '自备 API 密钥或开发者访问码；不再提供匿名共享额度。',
       'DeepL' =>
         '请选择控制台对应的 free / pro 接口。新注册 Developer 额度为总计 100 万字符；旧 Free 为每月 50 万，具体以账户为准。',
       'Azure' => 'F0 层每月 200 万字符，到限停止；其他定价层以账户配置为准。',
-      _ => 'Basic 每月 50 万 NMT 字符抵扣，需启用结算，超额收费；请在账户设置用量限额。',
+      'Google' => 'Basic 每月 50 万 NMT 字符抵扣，需启用结算，超额收费；请在账户设置用量限额。',
+      'Baidu' => '百度通用翻译：标准版每月 5 万、高级版 100 万、尊享版 200 万字符，超额收费；扩展语种可能需企业尊享版。',
+      'Tencent' =>
+        '腾讯文本翻译仅适用于既有账户，免费资源包已停发；服务将于 2027 年 10 月 1 日停用。当前支持 15 种目标语言。',
+      _ => '阿里云通用版主账户每月 100 万字符，子账户共享；超额后付费，使用前请设置限额。',
     };
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
@@ -3616,6 +3624,8 @@ class _WorkspaceState extends State<_Workspace> {
                         : '凭据：•••••• · 仅本次会话')
                   : provider == 'MyMemory'
                   ? '匿名模式（未配置私有词库密钥）'
+                  : hasCredentialData
+                  ? '凭据尚未填写完整'
                   : '尚未配置凭据',
               style: const TextStyle(fontSize: 11, color: _muted),
             ),
@@ -3626,7 +3636,7 @@ class _WorkspaceState extends State<_Workspace> {
                   onPressed: () => _providerCredentialDialog(provider),
                   child: Text('配置 $provider'),
                 ),
-                if (configured)
+                if (hasCredentialData)
                   TextButton(
                     onPressed: () =>
                         _guard(() => c.clearProviderCredentials(provider)),
@@ -3640,14 +3650,34 @@ class _WorkspaceState extends State<_Workspace> {
     );
   }
 
+  String _credentialLabel(String provider, String field) => switch (field) {
+    'apiKey' => provider == 'MyMemory' ? '私有词库 API 密钥（可留空匿名）' : 'API 密钥',
+    'developerToken' => '开发者访问码',
+    'tenantId' => 'Tenant ID（选填）',
+    'region' =>
+      provider == 'Tencent' ? '区域（默认 ap-guangzhou）' : '区域（选填，如 eastasia）',
+    'appId' => 'App ID',
+    'secretId' => 'Secret ID',
+    'secretKey' => 'Secret Key',
+    'accessKeyId' => 'AccessKey ID',
+    'accessKeySecret' => 'AccessKey Secret',
+    _ => field,
+  };
+
   Future<void> _providerCredentialDialog(String provider) async {
     final current = c.credentialsFor(provider);
-    final apiKey = TextEditingController(text: current['apiKey'] ?? '');
-    final developerToken = TextEditingController(
-      text: current['developerToken'] ?? '',
-    );
-    final tenant = TextEditingController(text: current['tenantId'] ?? '');
-    final region = TextEditingController(text: current['region'] ?? '');
+    final controllers = {
+      for (final field
+          in providerCredentialFields[provider] ?? const <String>[])
+        if (field != 'plan')
+          field: TextEditingController(
+            text:
+                current[field] ??
+                (provider == 'Tencent' && field == 'region'
+                    ? 'ap-guangzhou'
+                    : ''),
+          ),
+    };
     var developer = current.containsKey('developerToken');
     var remember = c.credentialsSaved(provider), saving = false;
     var plan = current['plan'] == 'pro' ? 'pro' : 'free';
@@ -3671,31 +3701,29 @@ class _WorkspaceState extends State<_Workspace> {
                       value: developer,
                       onChanged: (value) => update(() => developer = value),
                     ),
-                  TextField(
-                    controller: developer ? developerToken : apiKey,
-                    obscureText: true,
-                    autocorrect: false,
-                    enableSuggestions: false,
-                    decoration: InputDecoration(
-                      labelText: developer
-                          ? '开发者访问码'
-                          : provider == 'MyMemory'
-                          ? '私有词库 API 密钥（可留空匿名）'
-                          : 'API 密钥',
-                    ),
-                  ),
-                  if (provider == 'ZTAITrans' && !developer)
+                  for (final field in controllers.keys.where(
+                    (field) =>
+                        provider != 'ZTAITrans' ||
+                        (developer
+                            ? field == 'developerToken'
+                            : field != 'developerToken'),
+                  ))
                     TextField(
-                      controller: tenant,
-                      decoration: const InputDecoration(
-                        labelText: 'Tenant ID（选填）',
+                      key: ValueKey('credential-$provider-$field'),
+                      controller: controllers[field],
+                      obscureText: providerSecretFields.contains(field),
+                      autocorrect: false,
+                      enableSuggestions: false,
+                      decoration: InputDecoration(
+                        labelText: _credentialLabel(provider, field),
                       ),
                     ),
-                  if (provider == 'Azure')
-                    TextField(
-                      controller: region,
-                      decoration: const InputDecoration(
-                        labelText: '区域（选填，如 eastasia）',
+                  if (provider == 'Alibaba')
+                    const Padding(
+                      padding: EdgeInsets.only(top: 10),
+                      child: Text(
+                        '服务区域固定为 cn-hangzhou，签名由代理完成。',
+                        style: TextStyle(fontSize: 11, color: _muted),
                       ),
                     ),
                   if (provider == 'DeepL')
@@ -3748,20 +3776,15 @@ class _WorkspaceState extends State<_Workspace> {
                         error = null;
                       });
                       try {
-                        await c.saveProviderCredentials(
-                          provider,
-                          developer
-                              ? {'developerToken': developerToken.text}
-                              : {
-                                  'apiKey': apiKey.text,
-                                  if (provider == 'ZTAITrans')
-                                    'tenantId': tenant.text,
-                                  if (provider == 'Azure')
-                                    'region': region.text,
-                                  if (provider == 'DeepL') 'plan': plan,
-                                },
-                          remember: remember,
-                        );
+                        await c.saveProviderCredentials(provider, {
+                          for (final entry in controllers.entries)
+                            if (provider != 'ZTAITrans' ||
+                                (developer
+                                    ? entry.key == 'developerToken'
+                                    : entry.key != 'developerToken'))
+                              entry.key: entry.value.text,
+                          if (provider == 'DeepL') 'plan': plan,
+                        }, remember: remember);
                         if (dialogContext.mounted) Navigator.pop(dialogContext);
                       } catch (failure) {
                         if (dialogContext.mounted) {
@@ -3782,7 +3805,7 @@ class _WorkspaceState extends State<_Workspace> {
     );
     await Navigator.of(context).push(route);
     await route.completed;
-    for (final controller in [apiKey, developerToken, tenant, region]) {
+    for (final controller in controllers.values) {
       controller.dispose();
     }
   }

@@ -279,7 +279,7 @@
             let payload; try { payload = await withAbort(response.json(), controller.signal); } catch (cause) { if (controller.signal.aborted) throw cause; payload = null; }
             const status = Number(response.status || 200);
             if (response.ok === false || status >= 400 || payload?.code) throw remoteProviderFailure(provider, status, payload, response);
-            if (payload?.provider !== provider || typeof payload?.text !== 'string' || !payload.text.trim() || /^\s*(?:MYMEMORY WARNING:|<!doctype|<html|UNAUTHORIZED\s*$)/i.test(payload.text) || [credentials.apiKey, credentials.developerToken].some(secret => secret && payload.text.includes(secret))) throw providerFailure(provider, 'PROVIDER_RESPONSE', '平台未返回有效译文，原有内容已保留。');
+            if (payload?.provider !== provider || typeof payload?.text !== 'string' || !payload.text.trim() || /^\s*(?:MYMEMORY WARNING:|<!doctype|<html|UNAUTHORIZED\s*$)/i.test(payload.text) || [credentials.apiKey, credentials.developerToken, credentials.secretKey, credentials.accessKeySecret].some(secret => secret && payload.text.includes(secret))) throw providerFailure(provider, 'PROVIDER_RESPONSE', '平台未返回有效译文，原有内容已保留。');
             const text = normalizeMarkers(payload.text).replace(/\r\n|\r|\n/g, ' ');
             if (JSON.stringify(markers(content)) !== JSON.stringify(markers(text))) throw providerFailure(provider, 'PLACEHOLDER', '翻译改变了占位符或换行标记，结果未保存。');
             ensureCurrent(); remember(key, text); return text;
@@ -305,7 +305,8 @@
       for (const line of source.split(/(\r\n|\r|\n)/)) {
         if (!line.trim()) { parts.push({ literal: line }); continue; }
         const [, prefix, core, suffix] = line.match(/^(\s*)([\s\S]*?)(\s*)$/u), protectedSource = protect(core);
-        parts.push({ prefix, suffix, core, protectedSource, chunks: splitProviderText(protectedSource.text, provider === 'MyMemory' ? 480 : 4000, provider === 'MyMemory') });
+        const maximum = provider === 'MyMemory' ? 480 : ['Baidu', 'Tencent', 'Alibaba'].includes(provider) ? 1000 : 4000;
+        parts.push({ prefix, suffix, core, protectedSource, chunks: splitProviderText(protectedSource.text, maximum, provider === 'MyMemory') });
       }
       const total = parts.reduce((sum, part) => sum + (part.chunks?.length || 0), 0); let completed = 0, output = '';
       notify(options.onProgress, { provider, completed, total, requestCount });

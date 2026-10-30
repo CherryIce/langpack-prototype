@@ -128,9 +128,12 @@ const PROVIDER_LOCALES = Object.freeze({
   MyMemory: Object.freeze(Object.fromEntries(Object.keys(TARGETS).filter(code => !['pt-BR', 'fil', 'nb'].includes(code)).map(code => [code, ({ 'zh-Hant': 'zh-TW', si: 'si-LK' })[code] || code]))),
   Azure: Object.freeze(Object.fromEntries(Object.keys(TARGETS).map(code => [code, ({ 'pt-BR': 'pt', 'pt-PT': 'pt-pt' })[code] || code]))),
   Google: Object.freeze(Object.fromEntries(Object.keys(TARGETS).filter(code => code !== 'nb').map(code => [code, ({ 'zh-Hant': 'zh-TW' })[code] || code]))),
-  DeepL: Object.freeze(Object.fromEntries(Object.keys(TARGETS).filter(code => !['fil', 'si'].includes(code)).map(code => [code, ({ 'zh-Hant': 'ZH-HANT', en: 'EN-US', 'pt-BR': 'PT-BR', 'pt-PT': 'PT-PT' })[code] || code.toUpperCase()])))
+  DeepL: Object.freeze(Object.fromEntries(Object.keys(TARGETS).filter(code => !['fil', 'si'].includes(code)).map(code => [code, ({ 'zh-Hant': 'ZH-HANT', en: 'EN-US', 'pt-BR': 'PT-BR', 'pt-PT': 'PT-PT' })[code] || code.toUpperCase()]))),
+  Alibaba: Object.freeze(Object.fromEntries(Object.keys(TARGETS).filter(code => !['pt-BR', 'pt-PT', 'nb', 'hr', 'uk'].includes(code)).map(code => [code, code === 'zh-Hant' ? 'zh-tw' : code]))),
+  Baidu: Object.freeze({ 'zh-Hant': 'cht', en: 'en', ms: 'may', th: 'th', fr: 'fra', es: 'spa', ar: 'ara', fil: 'fil', vi: 'vie', ru: 'ru', tr: 'tr', id: 'id', ja: 'jp', ko: 'kor', de: 'de', hi: 'hi', hu: 'hu', it: 'it', ro: 'rom', sv: 'swe', bg: 'bul', pl: 'pl', da: 'dan', fi: 'fin', nl: 'nl', cs: 'cs', sk: 'sk', uk: 'ukr', el: 'el', nb: 'nob', hr: 'hrv', si: 'sin' }),
+  Tencent: Object.freeze({ 'zh-Hant': 'zh-TW', en: 'en', ms: 'ms', th: 'th', fr: 'fr', es: 'es', ar: 'ar', vi: 'vi', ru: 'ru', tr: 'tr', id: 'id', ja: 'ja', ko: 'ko', de: 'de', it: 'it' })
 });
-const PROVIDER_NAMES = ['MyMemory', 'ZTAITrans', 'DeepL', 'Azure', 'Google'];
+const PROVIDER_NAMES = ['MyMemory', 'ZTAITrans', 'DeepL', 'Azure', 'Google', 'Baidu', 'Tencent', 'Alibaba'];
 const plainObject = value => value && typeof value === 'object' && !Array.isArray(value);
 const safeCredential = value => typeof value === 'string' && /^[\x21-\x7e]{1,2048}$/.test(value);
 function providerProblem(provider, status, code, message, flags = {}) {
@@ -147,9 +150,12 @@ async function developerAuthorized(token, env) {
 }
 function credentialShape(provider, value) {
   if (!plainObject(value)) return false;
-  const fields = { MyMemory: ['apiKey', 'email'], ZTAITrans: ['apiKey', 'tenantId', 'developerToken'], DeepL: ['apiKey', 'plan'], Azure: ['apiKey', 'region'], Google: ['apiKey'] }[provider];
+  const fields = { MyMemory: ['apiKey', 'email'], ZTAITrans: ['apiKey', 'tenantId', 'developerToken'], DeepL: ['apiKey', 'plan'], Azure: ['apiKey', 'region'], Google: ['apiKey'], Baidu: ['appId', 'secretKey'], Tencent: ['secretId', 'secretKey', 'region'], Alibaba: ['accessKeyId', 'accessKeySecret'] }[provider];
   if (!fields || Object.keys(value).some(key => !fields.includes(key))) return false;
   if (provider === 'ZTAITrans' && value.developerToken !== undefined) return Object.keys(value).length === 1 && safeCredential(value.developerToken);
+  if (provider === 'Baidu') return typeof value.appId === 'string' && /^\d{1,64}$/.test(value.appId) && safeCredential(value.secretKey);
+  if (provider === 'Tencent') return safeCredential(value.secretId) && safeCredential(value.secretKey) && (value.region === undefined || typeof value.region === 'string' && /^[a-z]{2}-[a-z0-9-]{1,48}$/.test(value.region));
+  if (provider === 'Alibaba') return safeCredential(value.accessKeyId) && safeCredential(value.accessKeySecret);
   if (!safeCredential(value.apiKey)) return false;
   if (provider === 'MyMemory' && value.email !== undefined && (typeof value.email !== 'string' || value.email.length > 254 || value.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.email))) return false;
   if (provider === 'DeepL' && value.plan !== undefined && !['free', 'pro'].includes(value.plan)) return false;
@@ -157,8 +163,66 @@ function credentialShape(provider, value) {
   if (provider === 'ZTAITrans' && value.tenantId !== undefined && (typeof value.tenantId !== 'string' || !/^[a-zA-Z0-9_.-]{1,128}$/.test(value.tenantId))) return false;
   return true;
 }
-function providerUpstream(provider, credentials, content, locale) {
+// Baidu's documented protocol requires MD5. This small UTF-8 implementation also
+// runs in Node, whose Web Crypto deliberately does not expose the legacy digest.
+function baiduMD5(value) {
+  const source = new TextEncoder().encode(value), length = Math.ceil((source.length + 9) / 64) * 64;
+  const bytes = new Uint8Array(length); bytes.set(source); bytes[source.length] = 0x80;
+  const view = new DataView(bytes.buffer); view.setUint32(length - 8, source.length * 8, true); view.setUint32(length - 4, Math.floor(source.length / 0x20000000), true);
+  const shifts = [7,12,17,22,5,9,14,20,4,11,16,23,6,10,15,21];
+  const constants = Array.from({ length: 64 }, (_, i) => Math.floor(Math.abs(Math.sin(i + 1)) * 0x100000000) >>> 0);
+  let a0 = 0x67452301, b0 = 0xefcdab89, c0 = 0x98badcfe, d0 = 0x10325476;
+  for (let offset = 0; offset < length; offset += 64) {
+    let a = a0, b = b0, c = c0, d = d0;
+    for (let i = 0; i < 64; i++) {
+      const round = Math.floor(i / 16), shift = shifts[round * 4 + i % 4];
+      const f = round === 0 ? (b & c) | (~b & d) : round === 1 ? (d & b) | (~d & c) : round === 2 ? b ^ c ^ d : c ^ (b | ~d);
+      const index = round === 0 ? i : round === 1 ? (5 * i + 1) % 16 : round === 2 ? (3 * i + 5) % 16 : (7 * i) % 16;
+      const n = (a + f + constants[i] + view.getUint32(offset + index * 4, true)) >>> 0;
+      const next = (b + ((n << shift) | (n >>> (32 - shift)))) >>> 0;
+      a = d; d = c; c = b; b = next;
+    }
+    a0 = (a0 + a) >>> 0; b0 = (b0 + b) >>> 0; c0 = (c0 + c) >>> 0; d0 = (d0 + d) >>> 0;
+  }
+  const result = new DataView(new ArrayBuffer(16)); [a0, b0, c0, d0].forEach((n, i) => result.setUint32(i * 4, n, true));
+  return Array.from(new Uint8Array(result.buffer), n => n.toString(16).padStart(2, '0')).join('');
+}
+const utf8 = value => new TextEncoder().encode(value);
+const hex = bytes => Array.from(new Uint8Array(bytes), n => n.toString(16).padStart(2, '0')).join('');
+const sha256 = async value => hex(await crypto.subtle.digest('SHA-256', utf8(value)));
+async function hmac(hash, key, value) {
+  const imported = await crypto.subtle.importKey('raw', typeof key === 'string' ? utf8(key) : key, { name: 'HMAC', hash }, false, ['sign']);
+  return crypto.subtle.sign('HMAC', imported, utf8(value));
+}
+const rpcEncode = value => encodeURIComponent(value).replace(/[!'()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+const rpcForm = values => Object.keys(values).sort().map(key => rpcEncode(key) + '=' + rpcEncode(values[key])).join('&');
+async function providerUpstream(provider, credentials, content, locale) {
   const headers = { 'Content-Type': 'application/json' };
+  if (provider === 'Baidu') {
+    const salt = String(crypto.getRandomValues(new Uint32Array(1))[0]);
+    const form = { q: content, from: 'zh', to: PROVIDER_LOCALES.Baidu[locale], appid: credentials.appId, salt, sign: baiduMD5(credentials.appId + content + salt + credentials.secretKey) };
+    return { url: 'https://fanyi-api.baidu.com/api/trans/vip/translate', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, encodedBody: new URLSearchParams(form).toString() };
+  }
+  if (provider === 'Tencent') {
+    const timestamp = Math.floor(Date.now() / 1000), date = new Date(timestamp * 1000).toISOString().slice(0, 10);
+    const host = 'tmt.tencentcloudapi.com', type = 'application/json; charset=utf-8';
+    const encodedBody = JSON.stringify({ SourceText: content, Source: 'zh', Target: PROVIDER_LOCALES.Tencent[locale], ProjectId: 0 });
+    const canonical = 'POST\n/\n\ncontent-type:' + type + '\nhost:' + host + '\nx-tc-action:texttranslate\n\ncontent-type;host;x-tc-action\n' + await sha256(encodedBody);
+    const scope = date + '/tmt/tc3_request', toSign = 'TC3-HMAC-SHA256\n' + timestamp + '\n' + scope + '\n' + await sha256(canonical);
+    const dateKey = await hmac('SHA-256', 'TC3' + credentials.secretKey, date);
+    const serviceKey = await hmac('SHA-256', dateKey, 'tmt'), signingKey = await hmac('SHA-256', serviceKey, 'tc3_request');
+    const signature = hex(await hmac('SHA-256', signingKey, toSign));
+    return { url: 'https://' + host + '/', headers: { 'Content-Type': type, 'X-TC-Action': 'TextTranslate', 'X-TC-Version': '2018-03-21', 'X-TC-Timestamp': String(timestamp), 'X-TC-Region': credentials.region || 'ap-guangzhou', Authorization: 'TC3-HMAC-SHA256 Credential=' + credentials.secretId + '/' + scope + ', SignedHeaders=content-type;host;x-tc-action, Signature=' + signature }, encodedBody };
+  }
+  if (provider === 'Alibaba') {
+    const common = { AccessKeyId: credentials.accessKeyId, Action: 'TranslateGeneral', Format: 'JSON', Version: '2018-10-12', SignatureMethod: 'HMAC-SHA1', SignatureVersion: '1.0', Timestamp: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'), SignatureNonce: crypto.randomUUID(), RegionId: 'cn-hangzhou' };
+    const form = { FormatType: 'text', SourceLanguage: 'zh', TargetLanguage: PROVIDER_LOCALES.Alibaba[locale], SourceText: content, Scene: 'general' };
+    const signature = await hmac('SHA-1', credentials.accessKeySecret + '&', 'POST&%2F&' + rpcEncode(rpcForm({ ...common, ...form })));
+    common.Signature = btoa(String.fromCharCode(...new Uint8Array(signature)));
+    // As in Alibaba's official pop-core RPC client, every signed parameter is
+    // sent once in the form body, keeping both credentials and text out of URLs.
+    return { url: 'https://mt.cn-hangzhou.aliyuncs.com/', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, encodedBody: rpcForm({ ...common, ...form }) };
+  }
   if (provider === 'MyMemory') return { url: 'https://api.mymemory.translated.net/get?' + new URLSearchParams({ q: content, langpair: 'zh-CN|' + PROVIDER_LOCALES.MyMemory[locale], mt: '1', key: credentials.apiKey, ...(credentials.email ? { de: credentials.email } : {}) }), method: 'GET', headers: { Accept: 'application/json' } };
   if (provider === 'ZTAITrans') return { url: UPSTREAM, headers: { ...headers, 'X-Api-Key': credentials.apiKey }, body: { model: 'fast', targetLanguage: TARGETS[locale], items: [{ id: 'segment-1', content }], ...(credentials.tenantId ? { tenantId: credentials.tenantId } : {}) } };
   if (provider === 'DeepL') return { url: `https://${credentials.plan === 'pro' ? 'api' : 'api-free'}.deepl.com/v2/translate`, headers: { ...headers, Authorization: 'DeepL-Auth-Key ' + credentials.apiKey }, body: { text: [content], source_lang: 'ZH', target_lang: PROVIDER_LOCALES.DeepL[locale] } };
@@ -167,6 +231,24 @@ function providerUpstream(provider, credentials, content, locale) {
 }
 function genericUpstreamFailure(provider, response, payload) {
   const status = response.status;
+  if (['Baidu', 'Tencent', 'Alibaba'].includes(provider)) {
+    const code = provider === 'Baidu' ? String(payload?.error_code || '') : provider === 'Tencent' ? String(payload?.Response?.Error?.Code || '') : String(payload?.Code ?? '');
+    const auth = provider === 'Baidu' ? ['52003', '54001', '58000', '58003', '90107'].includes(code) : provider === 'Tencent' ? /^(?:AuthFailure|UnauthorizedOperation)(?:\.|$)/.test(code) || ['IpInBlacklist', 'IpNotInWhitelist'].includes(code) : ['10009', '10011'].includes(code) || /^(?:InvalidAccessKeyId|SignatureDoesNotMatch|InvalidSecurityToken|Forbidden|NoPermission|AccessDenied)(?:\.|$)/.test(code);
+    if ([401, 403].includes(status) || auth) return providerProblem(provider, 401, 'PROVIDER_AUTH', '该平台的凭据、访问权限或出口 IP 不可用，请检查配置。', { fatal: true });
+    const config = provider === 'Baidu' ? code === '58002' : provider === 'Tencent' ? ['UnsupportedRegion', 'FailedOperation.ServiceIsolate', 'ActionOffline', 'FailedOperation.UserNotRegistered', 'FailedOperation.StopUsing', 'FailedOperation.ErrorUserArea'].includes(code) : ['10010', '10013'].includes(code);
+    if (config) return providerProblem(provider, 400, 'PROVIDER_CONFIG', '该平台服务尚未开通、已停用或账户欠费，请检查平台控制台。', { fatal: true });
+    const quota = provider === 'Baidu' ? code === '54004' : provider === 'Tencent' ? ['FailedOperation.NoFreeAmount', 'FailedOperation.NoBalance', 'LimitExceeded.FreeAmountLimit', 'LimitExceeded.NoFreeAmount'].includes(code) : false;
+    if (quota) return providerProblem(provider, 402, 'PROVIDER_QUOTA', '该平台可用额度或余额已耗尽，已保存的译文会保留。', { quota: true });
+    const unsupported = provider === 'Baidu' ? code === '58001' : provider === 'Tencent' ? ['InvalidParameter.UnsupportedLanguage', 'UnsupportedOperation.UnsupportedLanguage', 'UnsupportedOperation.UnSupportedTargetLanguage', 'UnsupportedOperation.UnsupportedSourceLanguage'].includes(code) : code === '10005';
+    if (unsupported) return providerProblem(provider, 400, 'PROVIDER_UNSUPPORTED', '该平台或当前账户套餐不支持此语言方向。', { unsupported: true });
+    const rate = provider === 'Baidu' ? ['54003', '54005'].includes(code) : provider === 'Tencent' ? /^(?:RequestLimitExceeded|LimitExceeded)(?:\.|$)/.test(code) : /^(?:Throttling|Throttling\.User|Throttling\.Api)$/.test(code);
+    if (status === 429 || rate) return providerProblem(provider, 429, 'PROVIDER_RATE_LIMIT', '该平台请求过于频繁，请稍后重试。', { retryable: true, retryAfterMs: Math.max(cooldown(response), provider === 'Baidu' && code === '54005' ? 3000 : 0) });
+    const service = provider === 'Baidu' ? ['52001', '52002'].includes(code) : provider === 'Tencent' ? /^(?:InternalError|FailedOperation|ServiceUnavailable)(?:\.|$)/.test(code) : ['10001', '10002', '10007', '10012', '19999'].includes(code) || /^ServiceUnavailable(?:\.|$)/.test(code);
+    if (status >= 500 || service) return providerProblem(provider, 502, 'PROVIDER_SERVICE', '该平台暂时不可用，请稍后重试。', { retryable: true });
+    const success = provider === 'Baidu' ? !code || code === '52000' : provider === 'Tencent' ? !code : code === '200';
+    if (!response.ok || !success || status >= 300) return providerProblem(provider, 400, 'PROVIDER_REQUEST', '该平台拒绝了请求，请检查原文、套餐和目标语言。');
+    return null;
+  }
   if (provider === 'MyMemory') {
     const details = typeof payload?.responseDetails === 'string' ? payload.responseDetails : '';
     const candidate = typeof payload?.responseData?.translatedText === 'string' ? payload.responseData.translatedText : '';
@@ -202,7 +284,7 @@ function decodeProviderText(value) {
     return ({ '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&apos;': "'" })[entity.toLowerCase()] || entity;
   });
 }
-function genericOutput(provider, payload, locale, credentials) {
+function genericOutput(provider, payload, locale, credentials, source) {
   let text;
   if (provider === 'MyMemory' && typeof payload?.responseData?.translatedText === 'string') text = decodeProviderText(payload.responseData.translatedText);
   if (provider === 'DeepL' && Array.isArray(payload?.translations) && payload.translations.length === 1) text = payload.translations[0]?.text;
@@ -211,7 +293,11 @@ function genericOutput(provider, payload, locale, credentials) {
     if (typeof translation?.to === 'string' && translation.to.toLowerCase() === PROVIDER_LOCALES.Azure[locale].toLowerCase()) text = translation.text;
   }
   if (provider === 'Google' && Array.isArray(payload?.data?.translations) && payload.data.translations.length === 1 && typeof payload.data.translations[0]?.translatedText === 'string') text = decodeProviderText(payload.data.translations[0].translatedText);
-  if (typeof text !== 'string' || !text.trim() || text.includes(credentials.apiKey) || /^(?:\s*[.…]\s*)+$/u.test(text) || /^\s*(?:<!doctype html|<html(?:\s|>)|Internal Server Error\s*$)/i.test(text)) return null;
+  if (provider === 'Baidu' && payload?.from === 'zh' && payload?.to === PROVIDER_LOCALES.Baidu[locale] && Array.isArray(payload?.trans_result) && payload.trans_result.length > 0 && payload.trans_result.every(item => typeof item?.src === 'string' && typeof item?.dst === 'string' && item.dst.trim()) && payload.trans_result.map(item => item.src).join('\n') === source) text = payload.trans_result.map(item => item.dst).join('\n');
+  if (provider === 'Tencent' && payload?.Response?.Source === 'zh' && payload?.Response?.Target === PROVIDER_LOCALES.Tencent[locale]) text = payload.Response.TargetText;
+  if (provider === 'Alibaba') text = payload?.Data?.Translated;
+  const secrets = ['apiKey', 'appId', 'secretId', 'secretKey', 'accessKeyId', 'accessKeySecret'].map(field => credentials[field]).filter(value => typeof value === 'string' && value);
+  if (typeof text !== 'string' || !text.trim() || secrets.some(secret => text.includes(secret)) || /^(?:\s*[.…]\s*)+$/u.test(text) || /^\s*(?:<!doctype html|<html(?:\s|>)|Internal Server Error\s*$)/i.test(text)) return null;
   return text;
 }
 
@@ -256,8 +342,13 @@ export function createHandler({ fetchImpl = (...args) => fetch(...args), timeout
       if (!developerConfigured || !await developerAuthorized(credentials.developerToken, env)) return providerProblem(provider, 401, 'PROVIDER_AUTH', '开发者访问口令无效或尚未配置。', { fatal: true });
       credentials = { apiKey: serverKey };
     }
-    const upstream = providerUpstream(provider, credentials, body.content, body.locale);
-    const upstreamBody = JSON.stringify(upstream.body);
+    const contentBytes = new TextEncoder().encode(body.content).byteLength;
+    const characterLimit = { Baidu: 1000, Tencent: 2000, Alibaba: 5000 }[provider];
+    if (characterLimit && Array.from(body.content).length > characterLimit || provider === 'Baidu' && contentBytes > 6000) return providerProblem(provider, 413, 'BACKUP_TOO_LARGE', '这段内容超过该平台单次请求限制，请拆分后重试。');
+    let upstream;
+    try { upstream = await providerUpstream(provider, credentials, body.content, body.locale); }
+    catch (_) { return providerProblem(provider, 502, 'PROVIDER_SERVICE', '无法准备该平台请求，请稍后重试。', { retryable: true }); }
+    const upstreamBody = upstream.encodedBody ?? JSON.stringify(upstream.body);
     const maximum = provider === 'Google' ? 100 * 1024 : provider === 'DeepL' ? 128 * 1024 : MAX_REQUEST_BYTES;
     if (provider === 'MyMemory' ? new TextEncoder().encode(body.content).byteLength > 480 : new TextEncoder().encode(upstreamBody).byteLength > maximum) return providerProblem(provider, 413, 'BACKUP_TOO_LARGE', '这段内容超过该平台单次请求限制，请拆分后重试。');
     // On Workers this header is assigned by Cloudflare, preserving the actual caller's
@@ -286,7 +377,7 @@ export function createHandler({ fetchImpl = (...args) => fetch(...args), timeout
         if (failure.status >= 500) return providerProblem(provider, 502, 'PROVIDER_SERVICE', '该平台暂时不可用，请稍后重试。', { retryable: !!diagnostic.retryable });
         return providerProblem(provider, 400, 'PROVIDER_REQUEST', '该平台拒绝了请求，请检查原文和目标语言。');
       }
-      const text = provider === 'ZTAITrans' ? validOutput(payload, body.content, body.locale, credentials.apiKey) : genericOutput(provider, payload, body.locale, credentials);
+      const text = provider === 'ZTAITrans' ? validOutput(payload, body.content, body.locale, credentials.apiKey) : genericOutput(provider, payload, body.locale, credentials, body.content);
       if (text === null || body.credentials?.developerToken && text.includes(body.credentials.developerToken)) return providerProblem(provider, 502, legacy ? 'BACKUP_RESPONSE' : 'PROVIDER_RESPONSE', '平台返回了不完整或不匹配的结果，未保存为译文。');
       return json({ text, provider, ...(provider === 'ZTAITrans' ? { model: 'fast' } : provider === 'Google' ? { model: 'nmt' } : {}) });
     } catch (_) {

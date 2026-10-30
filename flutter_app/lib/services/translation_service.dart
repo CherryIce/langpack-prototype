@@ -331,6 +331,25 @@ class TranslationService {
     'MyMemory' => _languageMap.containsKey(locale),
     'DeepL' => !['fil', 'si'].contains(locale),
     'Google' => locale != 'nb',
+    'Baidu' => !['pt-BR', 'pt-PT'].contains(locale),
+    'Tencent' => const [
+      'zh-Hant',
+      'en',
+      'ms',
+      'th',
+      'fr',
+      'es',
+      'ar',
+      'vi',
+      'ru',
+      'tr',
+      'id',
+      'ja',
+      'ko',
+      'de',
+      'it',
+    ].contains(locale),
+    'Alibaba' => !['pt-BR', 'pt-PT', 'nb', 'hr', 'uk'].contains(locale),
     _ => true,
   };
 
@@ -919,7 +938,11 @@ class TranslationService {
     );
   }
 
-  List<String> _proxyChunks(String text, {bool byteLimit = false}) {
+  List<String> _proxyChunks(
+    String text, {
+    bool byteLimit = false,
+    int maxCodepoints = 4000,
+  }) {
     final result = <String>[];
     var current = StringBuffer(), length = 0;
     final pieces = RegExp(
@@ -937,7 +960,7 @@ class TranslationService {
         continue;
       }
       final size = byteLimit ? utf8.encode(token).length : count;
-      if (length + size > (byteLimit ? 480 : 4000) && length > 0) {
+      if (length + size > (byteLimit ? 480 : maxCodepoints) && length > 0) {
         result.add(current.toString());
         current = StringBuffer();
         length = 0;
@@ -963,11 +986,10 @@ class TranslationService {
     if (provider == 'MyMemory' && email.isNotEmpty) {
       credentials['email'] = email;
     }
-    final key = credentials['apiKey'] ?? '',
-        token = credentials['developerToken'] ?? '';
-    if (provider == 'ZTAITrans'
-        ? (key.isEmpty == token.isEmpty)
-        : key.isEmpty) {
+    if (provider == 'Tencent') {
+      credentials.putIfAbsent('region', () => 'ap-guangzhou');
+    }
+    if (!providerCredentialsReady(provider, credentials)) {
       throw TranslationFailure(
         'PROVIDER_CONFIG',
         '$provider 尚未配置凭据，请先在设置中填写。',
@@ -987,7 +1009,13 @@ class TranslationService {
     final protected = _Protected(whitespace[2]!, newlines: true);
     final chunks = provider == 'ZTAITrans'
         ? [protected.text]
-        : _proxyChunks(protected.text, byteLimit: provider == 'MyMemory');
+        : _proxyChunks(
+            protected.text,
+            byteLimit: provider == 'MyMemory',
+            maxCodepoints: ['Baidu', 'Tencent', 'Alibaba'].contains(provider)
+                ? 1000
+                : 4000,
+          );
     final output = StringBuffer();
     String? model;
     for (final chunk in chunks) {
@@ -1034,7 +1062,20 @@ class TranslationService {
               throw _providerFailure(response, payload, provider);
             }
             final raw = payload?['text'];
+            final reflectedSecret = credentials.entries
+                .where(
+                  (entry) =>
+                      providerSecretFields.contains(entry.key) &&
+                      entry.value.isNotEmpty,
+                )
+                .any(
+                  (entry) =>
+                      (raw is String && raw.contains(entry.value)) ||
+                      (payload?['model'] is String &&
+                          (payload!['model'] as String).contains(entry.value)),
+                );
             if (raw is! String ||
+                reflectedSecret ||
                 raw.trim().isEmpty ||
                 payload?['provider'] != provider ||
                 RegExp(

@@ -23,8 +23,8 @@ async function payload(response, expectedStatus) {
 
 test('status exposes configuration boolean only and unknown routes fall through', async () => {
   const handler = createHandler({ fetchImpl: () => assert.fail('must not call upstream') });
-  assert.deepEqual(await payload(await handler(new Request(origin + '/api/translation/status'), env), 200), { backupConfigured: false, backupProvider: 'ZTAITrans', developerConfigured: true, developerAccessRequired: true, userCredentialsRequired: true, providers: ['MyMemory', 'ZTAITrans', 'DeepL', 'Azure', 'Google'] });
-  assert.deepEqual(await payload(await handler(new Request(origin + '/api/translation/status'), {}), 200), { backupConfigured: false, backupProvider: 'ZTAITrans', developerConfigured: false, developerAccessRequired: true, userCredentialsRequired: true, providers: ['MyMemory', 'ZTAITrans', 'DeepL', 'Azure', 'Google'] });
+  assert.deepEqual(await payload(await handler(new Request(origin + '/api/translation/status'), env), 200), { backupConfigured: false, backupProvider: 'ZTAITrans', developerConfigured: true, developerAccessRequired: true, userCredentialsRequired: true, providers: ['MyMemory', 'ZTAITrans', 'DeepL', 'Azure', 'Google', 'Baidu', 'Tencent', 'Alibaba'] });
+  assert.deepEqual(await payload(await handler(new Request(origin + '/api/translation/status'), {}), 200), { backupConfigured: false, backupProvider: 'ZTAITrans', developerConfigured: false, developerAccessRequired: true, userCredentialsRequired: true, providers: ['MyMemory', 'ZTAITrans', 'DeepL', 'Azure', 'Google', 'Baidu', 'Tencent', 'Alibaba'] });
   assert.equal(await handler(new Request(origin + '/index.html'), env), null);
 });
 

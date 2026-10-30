@@ -23,13 +23,61 @@ test('provider vault defaults to tab session and explicitly remembered secrets s
   assert.equal(local.getItem('langpack-prototype-v1'), '{"projects":[]}');
 });
 
-test('five exact providers and explicit language capabilities preserve the 34 resource language distinctions', () => {
-  assert.deepEqual(P.names, ['MyMemory', 'ZTAITrans', 'DeepL', 'Azure', 'Google']);
+test('eight exact providers and explicit language capabilities preserve the 34 resource language distinctions', () => {
+  assert.deepEqual(P.names, ['MyMemory', 'ZTAITrans', 'DeepL', 'Azure', 'Google', 'Baidu', 'Tencent', 'Alibaba']);
   assert.deepEqual(P.normalizeOrder(['DeepL', 'MyMemory', 'DeepL', 'arbitrary']), ['DeepL', 'MyMemory']);
   for (const locale of ['pt-BR', 'pt-PT', 'nb', 'zh-Hant', 'ms']) assert.equal(P.supports('DeepL', locale), true);
   for (const locale of ['fil', 'si']) assert.equal(P.supports('DeepL', locale), false);
   assert.equal(P.supports('Google', 'nb'), false); assert.equal(P.supports('Azure', 'nb'), true);
   assert.deepEqual(P.cleanCredentials('ZTAITrans', { developerToken: ' fixture-developer ', tenantId: 'must-not-send' }), { developerToken: 'fixture-developer' });
+  const locales = require('../web/languages.js').targets.map(language => language.code);
+  assert.equal(locales.filter(locale => P.supports('Baidu', locale)).length, 32);
+  assert.deepEqual(locales.filter(locale => P.supports('Tencent', locale)), ['zh-Hant', 'en', 'ms', 'th', 'fr', 'es', 'ar', 'vi', 'ru', 'tr', 'id', 'ja', 'ko', 'de', 'it']);
+  assert.equal(locales.filter(locale => P.supports('Alibaba', locale)).length, 29);
+  for (const provider of ['Baidu', 'Tencent', 'Alibaba']) for (const locale of ['pt-BR', 'pt-PT']) assert.equal(P.supports(provider, locale), false);
+  assert.equal(P.supports('Tencent', 'hi'), false); assert.equal(P.supports('Alibaba', 'hr'), false); assert.equal(P.supports('Alibaba', 'uk'), false);
+});
+
+test('domestic platforms require their exact credential pairs, with fixed/default regional handling and no generic API-key shortcut', () => {
+  for (const provider of ['Baidu', 'Tencent', 'Alibaba']) assert.equal(P.configured(provider, { apiKey: 'wrong-shape' }), false);
+  assert.equal(P.configured('Baidu', { appId: 'fixture-app' }), false);
+  assert.equal(P.configured('Tencent', { secretId: 'fixture-id' }), false);
+  assert.equal(P.configured('Alibaba', { accessKeyId: 'fixture-id' }), false);
+  assert.deepEqual(P.cleanCredentials('Baidu', { appId: ' fixture-app ', secretKey: ' fixture-baidu-secret ', apiKey: 'ignored' }), { appId: 'fixture-app', secretKey: 'fixture-baidu-secret' });
+  assert.deepEqual(P.cleanCredentials('Tencent', { secretId: 'fixture-id', secretKey: 'fixture-tencent-secret' }), { secretId: 'fixture-id', secretKey: 'fixture-tencent-secret', region: 'ap-guangzhou' });
+  assert.deepEqual(P.cleanCredentials('Alibaba', { accessKeyId: 'fixture-id', accessKeySecret: 'fixture-alibaba-secret', region: 'arbitrary', endpoint: 'https://unrelated.invalid' }), { accessKeyId: 'fixture-id', accessKeySecret: 'fixture-alibaba-secret' });
+});
+
+test('all domestic clients post only BYOK credential pairs and keep long text within 1000 codepoints and Baidu 6000 bytes', async () => {
+  const source = '  ' + '😀'.repeat(995) + '{name}' + '正文'.repeat(1100) + '\r\n下一行 %1$s  ';
+  const credentials = { Baidu: { appId: 'fixture-app', secretKey: 'fixture-baidu-secret' }, Tencent: { secretId: 'fixture-id', secretKey: 'fixture-tencent-secret' }, Alibaba: { accessKeyId: 'fixture-id', accessKeySecret: 'fixture-alibaba-secret' } };
+  for (const provider of Object.keys(credentials)) {
+    const calls = [];
+    const client = T.createProviderClient({ provider, getCredentials: () => credentials[provider], fetchImpl: async (url, options) => { const body = JSON.parse(options.body); calls.push({ url, body }); return response(provider, body.content); } });
+    assert.equal((await client.translate(source, 'en')).text, source);
+    assert.ok(calls.length > 2); assert.ok(calls.every(call => call.url === '/api/translation/provider'));
+    assert.ok(calls.every(call => Array.from(call.body.content).length <= 1000));
+    if (provider === 'Baidu') assert.ok(calls.every(call => Buffer.byteLength(call.body.content) <= 6000));
+    assert.deepEqual(calls[0].body.credentials, P.cleanCredentials(provider, credentials[provider]));
+    assert.equal(Object.hasOwn(calls[0].body.credentials, 'apiKey'), false);
+    assert.equal((await client.translate(source, 'en')).cached, true);
+    const missing = T.createProviderClient({ provider, getCredentials: () => ({ apiKey: 'wrong' }), fetchImpl: () => assert.fail('Incomplete pair must not send') });
+    await assert.rejects(missing.translate('登录', 'en'), { code: 'PROVIDER_CONFIG', fatal: true });
+  }
+});
+
+test('domestic secret echoes fail safely and provider changes only advance for quota or unsupported languages', async () => {
+  const credentials = { Baidu: { appId: 'fixture-app', secretKey: 'fixture-baidu-secret' }, Tencent: { secretId: 'fixture-id', secretKey: 'fixture-tencent-secret' }, Alibaba: { accessKeyId: 'fixture-id', accessKeySecret: 'fixture-alibaba-secret' } };
+  for (const provider of Object.keys(credentials)) {
+    const secret = credentials[provider].secretKey || credentials[provider].accessKeySecret;
+    const client = T.createProviderClient({ provider, getCredentials: () => credentials[provider], fetchImpl: async () => response(provider, secret) });
+    await assert.rejects(client.translate('登录', 'en'), error => error.code === 'PROVIDER_RESPONSE' && !JSON.stringify(error).includes(secret));
+  }
+  const calls = [];
+  const router = T.createOrderedClient({ order: ['Tencent', 'Baidu', 'Alibaba', 'Azure'], clients: Object.fromEntries(['Tencent', 'Baidu', 'Alibaba', 'Azure'].map(provider => [provider, { async translate() { calls.push(provider); return { provider, text: 'exact translation' }; } }])) });
+  assert.equal((await router.translate('登录', 'hi')).provider, 'Baidu');
+  assert.deepEqual(calls, ['Baidu']); calls.length = 0;
+  assert.equal((await router.translate('登录', 'pt-BR')).provider, 'Azure'); assert.deepEqual(calls, ['Azure']);
 });
 
 test('vault reports failed deletion of an old persistent or session copy and clear still visits every provider', () => {
@@ -150,7 +198,7 @@ test('actual anonymous MyMemory authentication wins over contradictory quota fla
   }
 });
 
-test('all five successful provider results remain recognized and reusable without provider changes forcing a new request', async () => {
+test('all eight successful provider results remain recognized and reusable without provider changes forcing a new request', async () => {
   for (const provider of P.names) {
     const row = { id: provider, key: 'login', source: '登录', translations: {}, reviewed: {} };
     const job = Jobs.createJob({ entries: [row], locales: ['en'] });

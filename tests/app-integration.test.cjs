@@ -609,3 +609,35 @@ test('changing the MyMemory contact identity pauses active work and resumes with
   assert.deepEqual(configs.map(value => value.email), ['', 'new-owner@example.com']);
   assert.equal(app.state().session.entries[0].translations.en, 'New identity result');
 });
+
+test('domestic platform forms save exact BYOK pairs, retain secrets outside projects and reuse successful translations after credential deletion', async t => {
+  const forms = {
+    Baidu: { appId: 'fixture-baidu-app', secretKey: 'fixture-baidu-private' },
+    Tencent: { secretId: 'fixture-tencent-id', secretKey: 'fixture-tencent-private' },
+    Alibaba: { accessKeyId: 'fixture-alibaba-id', accessKeySecret: 'fixture-alibaba-private' }
+  };
+  for (const [provider, credentials] of Object.entries(forms)) await t.test(provider, async () => {
+    const saved = fixture(['en']); saved.settings.providerOrder = ['MyMemory'];
+    const requests = [];
+    const app = boot(saved, undefined, { sessionValues: new Map(), providerFetch: async (url, options) => { requests.push({ url, body: JSON.parse(options.body) }); return new Response(JSON.stringify({ provider, text: provider + ' result' })); } }); t.after(() => app.close());
+    await app.click('nav', { view: 'settings' }); await app.change({ id: 'primary-provider', value: provider, dataset: {} });
+    assert.match(app.html(), /8 个平台/);
+    const [identity, secret] = Object.keys(credentials);
+    app.field(`provider-${provider}-${identity}`, credentials[identity]);
+    await app.click('save-provider-credentials', { provider });
+    assert.equal(app.sessionValues.get('langpack-provider-session-v1'), undefined);
+    app.field(`provider-${provider}-${secret}`, credentials[secret]);
+    await app.click('save-provider-credentials', { provider });
+    for (const value of Object.values(credentials)) { assert.doesNotMatch(JSON.stringify(app.state()), new RegExp(value)); assert.doesNotMatch(app.html(), new RegExp(value)); }
+    assert.equal(app.localValues.get('langpack-provider-credentials-v1'), undefined);
+    await app.click('project', { id: 'a' }); await app.click('translate-project'); await app.click('start-translation'); await until(() => app.state().session.status === 'completed');
+    const expected = provider === 'Tencent' ? { ...credentials, region: 'ap-guangzhou' } : credentials;
+    assert.equal(requests.length, 1); assert.equal(requests[0].url, '/api/translation/provider'); assert.equal(requests[0].body.provider, provider); assert.deepEqual(requests[0].body.credentials, expected);
+    assert.equal(app.state().session.entries[0].translationMeta.en.provider, provider);
+    for (const value of Object.values(credentials)) assert.doesNotMatch(JSON.stringify(app.engine.makePackages(app.state().session.entries, ['en'], true)), new RegExp(value));
+    await app.click('nav', { view: 'settings' }); await app.click('delete-provider-credentials', { provider });
+    assert.equal(app.sessionValues.get('langpack-provider-session-v1'), undefined);
+    await app.click('project', { id: 'a' }); await app.click('translate-project'); await app.click('start-translation'); await until(() => app.state().session.status === 'completed');
+    assert.equal(requests.length, 1); assert.equal(app.state().jobs[0].items[0].reused, true);
+  });
+});

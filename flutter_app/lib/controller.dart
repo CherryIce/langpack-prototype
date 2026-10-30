@@ -807,18 +807,15 @@ class AppController extends ChangeNotifier {
     String provider,
     Map<String, String> values,
   ) {
-    final fields = switch (provider) {
-      'MyMemory' => ['apiKey'],
-      'ZTAITrans' => ['apiKey', 'tenantId', 'developerToken'],
-      'DeepL' => ['apiKey', 'plan'],
-      'Azure' => ['apiKey', 'region'],
-      'Google' => ['apiKey'],
-      _ => <String>[],
-    };
-    return {
+    final fields = providerCredentialFields[provider] ?? const <String>[];
+    final cleaned = {
       for (final key in fields)
         if ((values[key] ?? '').trim().isNotEmpty) key: values[key]!.trim(),
     };
+    if (provider == 'Tencent') {
+      cleaned.putIfAbsent('region', () => 'ap-guangzhou');
+    }
+    return cleaned;
   }
 
   Future<void> saveProviderOrder(List<String> order, {bool? fallback}) async {
@@ -849,8 +846,9 @@ class AppController extends ChangeNotifier {
             (key.isNotEmpty && developer.isNotEmpty))) {
       throw const FormatException('请选择自备密钥或开发者访问码中的一种。');
     }
-    if (!['ZTAITrans', 'MyMemory'].contains(provider) && key.isEmpty) {
-      throw const FormatException('请输入该平台的 API 密钥。');
+    if (provider != 'MyMemory' &&
+        !providerCredentialsReady(provider, cleaned)) {
+      throw const FormatException('请完整填写该平台的所有必填凭据。');
     }
     if (provider == 'DeepL') {
       cleaned['plan'] = cleaned['plan'] == 'pro' ? 'pro' : 'free';

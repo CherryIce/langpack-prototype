@@ -6,7 +6,42 @@ const translationProviders = [
   'DeepL',
   'Azure',
   'Google',
+  'Baidu',
+  'Tencent',
+  'Alibaba',
 ];
+
+const providerCredentialFields = <String, List<String>>{
+  'MyMemory': ['apiKey'],
+  'ZTAITrans': ['apiKey', 'tenantId', 'developerToken'],
+  'DeepL': ['apiKey', 'plan'],
+  'Azure': ['apiKey', 'region'],
+  'Google': ['apiKey'],
+  'Baidu': ['appId', 'secretKey'],
+  'Tencent': ['secretId', 'secretKey', 'region'],
+  'Alibaba': ['accessKeyId', 'accessKeySecret'],
+};
+
+const providerSecretFields = {
+  'apiKey',
+  'developerToken',
+  'appId',
+  'secretId',
+  'secretKey',
+  'accessKeyId',
+  'accessKeySecret',
+};
+
+bool providerCredentialsReady(String provider, Map<String, String> values) {
+  bool present(String field) => (values[field] ?? '').trim().isNotEmpty;
+  return switch (provider) {
+    'ZTAITrans' => present('apiKey') != present('developerToken'),
+    'Baidu' => present('appId') && present('secretKey'),
+    'Tencent' => present('secretId') && present('secretKey'),
+    'Alibaba' => present('accessKeyId') && present('accessKeySecret'),
+    _ => present('apiKey'),
+  };
+}
 
 List<String> normalizeProviderOrder(Iterable<dynamic> values) {
   final result = values

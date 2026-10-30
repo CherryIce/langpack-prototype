@@ -78,7 +78,7 @@ void main() {
           service,
           ['MyMemory', 'DeepL'],
           credentials: {
-            'DeepL': {'apiKey': 'fixture', 'plan': 'free'},
+            'DeepL': {'apiKey': 'test_api_fixture_value_123', 'plan': 'free'},
           },
         );
         await expectLater(
@@ -123,7 +123,7 @@ void main() {
           service,
           ['MyMemory', 'DeepL'],
           credentials: {
-            'DeepL': {'apiKey': 'fixture', 'plan': 'free'},
+            'DeepL': {'apiKey': 'test_api_fixture_value_123', 'plan': 'free'},
           },
         );
         if (genuineQuota) {
@@ -170,7 +170,7 @@ void main() {
           service,
           ['Google'],
           credentials: {
-            'Google': {'apiKey': 'fixture'},
+            'Google': {'apiKey': 'test_api_fixture_value_123'},
           },
         );
         final source = separated ? '${'中' * 3999} 文' : '${'中' * 4000}文';
@@ -258,9 +258,9 @@ void main() {
       );
       addTearDown(service.dispose);
       const credentials = {
-        'DeepL': {'apiKey': 'd', 'plan': 'free'},
-        'Azure': {'apiKey': 'a'},
-        'Google': {'apiKey': 'g'},
+        'DeepL': {'apiKey': 'test_api_d_value_123', 'plan': 'free'},
+        'Azure': {'apiKey': 'test_api_a_value_123'},
+        'Google': {'apiKey': 'test_api_g_value_123'},
       };
       configure(service, [
         'DeepL',
@@ -311,7 +311,7 @@ void main() {
         service,
         ['MyMemory', 'Azure'],
         credentials: {
-          'Azure': {'apiKey': 'fixture'},
+          'Azure': {'apiKey': 'test_api_fixture_value_123'},
         },
       );
       await service.translate('一', 'en', token: CancelToken());
@@ -352,8 +352,8 @@ void main() {
         service,
         ['DeepL', 'Azure'],
         credentials: {
-          'DeepL': {'apiKey': 'd', 'plan': 'free'},
-          'Azure': {'apiKey': 'a'},
+          'DeepL': {'apiKey': 'test_api_d_value_123', 'plan': 'free'},
+          'Azure': {'apiKey': 'test_api_a_value_123'},
         },
       );
       await expectLater(
@@ -387,7 +387,7 @@ void main() {
         service,
         ['Google'],
         credentials: {
-          'Google': {'apiKey': 'fixture'},
+          'Google': {'apiKey': 'test_api_fixture_value_123'},
         },
       );
       final result = await service.translate(
@@ -611,7 +611,7 @@ void main() {
         ['MyMemory', 'Azure'],
         fallback: false,
         credentials: {
-          'Azure': {'apiKey': 'fixture'},
+          'Azure': {'apiKey': 'test_api_fixture_value_123'},
         },
       );
       await expectLater(
@@ -622,7 +622,7 @@ void main() {
         service,
         ['ZTAITrans', 'Azure'],
         credentials: {
-          'Azure': {'apiKey': 'fixture'},
+          'Azure': {'apiKey': 'test_api_fixture_value_123'},
         },
       );
       await expectLater(

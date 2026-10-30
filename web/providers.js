@@ -5,7 +5,7 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis, function () {
   'use strict';
-  const names = Object.freeze(['MyMemory', 'ZTAITrans', 'DeepL', 'Azure', 'Google']);
+  const names = Object.freeze(['MyMemory', 'ZTAITrans', 'DeepL', 'Azure', 'Google', 'Baidu', 'Tencent', 'Alibaba']);
   const SESSION_KEY = 'langpack-provider-session-v1';
   const LOCAL_KEY = 'langpack-provider-credentials-v1';
   const known = value => names.includes(value);
@@ -15,6 +15,9 @@
     if (provider === 'MyMemory') return !['pt-BR', 'fil', 'nb'].includes(locale);
     if (provider === 'DeepL') return !['fil', 'si'].includes(locale);
     if (provider === 'Google') return locale !== 'nb';
+    if (provider === 'Baidu') return !['pt-BR', 'pt-PT'].includes(locale);
+    if (provider === 'Tencent') return ['zh-Hant', 'en', 'ms', 'th', 'fr', 'es', 'ar', 'vi', 'ru', 'tr', 'id', 'ja', 'ko', 'de', 'it'].includes(locale);
+    if (provider === 'Alibaba') return !['pt-BR', 'pt-PT', 'nb', 'hr', 'uk'].includes(locale);
     return true;
   }
   function cleanCredentials(provider, value = {}) {
@@ -25,11 +28,17 @@
     if (provider === 'DeepL') return { apiKey: text('apiKey'), plan: value.plan === 'pro' ? 'pro' : 'free' };
     if (provider === 'Azure') return { apiKey: text('apiKey'), ...(text('region') ? { region: text('region') } : {}) };
     if (provider === 'Google') return { apiKey: text('apiKey') };
+    if (provider === 'Baidu') return { appId: text('appId'), secretKey: text('secretKey') };
+    if (provider === 'Tencent') return { secretId: text('secretId'), secretKey: text('secretKey'), region: text('region') || 'ap-guangzhou' };
+    if (provider === 'Alibaba') return { accessKeyId: text('accessKeyId'), accessKeySecret: text('accessKeySecret') };
     return {};
   }
   function configured(provider, value) {
     if (provider === 'MyMemory') return true;
     const clean = cleanCredentials(provider, value);
+    if (provider === 'Baidu') return !!(clean.appId && clean.secretKey);
+    if (provider === 'Tencent') return !!(clean.secretId && clean.secretKey);
+    if (provider === 'Alibaba') return !!(clean.accessKeyId && clean.accessKeySecret);
     return !!(clean.apiKey || clean.developerToken);
   }
   function createVault({ sessionStorage, localStorage } = {}) {

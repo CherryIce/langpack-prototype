@@ -615,7 +615,9 @@
       case 'save-provider-credentials': {
         const provider = button.dataset.provider;
         if (!P.known(provider)) break;
-        const old = credentialVault.get(provider), key = $(`#provider-${provider}-key`).value.trim();
+        const old = credentialVault.get(provider);
+        const entered = (name, fallback = '') => $(`#provider-${provider}-${name}`)?.value.trim() || fallback;
+        const key = entered('key');
         let credentials = { apiKey: key || old.apiKey || '' };
         if (provider === 'ZTAITrans') {
           const mode = $('#provider-ZTAITrans-mode').value || (old.developerToken ? 'developer' : 'apiKey');
@@ -623,6 +625,9 @@
         }
         if (provider === 'DeepL') credentials.plan = $('#provider-DeepL-plan').value || old.plan || 'free';
         if (provider === 'Azure') credentials.region = $('#provider-Azure-region').value.trim();
+        if (provider === 'Baidu') credentials = { appId: entered('appId', old.appId), secretKey: entered('secretKey', old.secretKey) };
+        if (provider === 'Tencent') credentials = { secretId: entered('secretId', old.secretId), secretKey: entered('secretKey', old.secretKey), region: entered('region', old.region || 'ap-guangzhou') };
+        if (provider === 'Alibaba') credentials = { accessKeyId: entered('accessKeyId', old.accessKeyId), accessKeySecret: entered('accessKeySecret', old.accessKeySecret) };
         if (!P.configured(provider, credentials)) { toast('请填写所选授权方式的凭据。'); break; }
         const remember = !!$(`#provider-${provider}-remember`).checked;
         const saved = credentialVault.set(provider, credentials, remember);

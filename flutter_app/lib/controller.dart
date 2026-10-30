@@ -31,6 +31,11 @@ class AppController extends ChangeNotifier {
   final Map<String, Map<String, String>> _providerCredentials = {};
   final Set<String> _savedCredentialProviders = {};
   int _credentialRevision = 0;
+  final Map<String, int> _credentialValidationVersions = {};
+  final Map<String, int> _credentialSaveVersions = {};
+  final Map<String, int> _validatedCredentialVersions = {};
+  final Map<String, CredentialValidation> _credentialValidations = {};
+  final Map<String, _CredentialValidationRun> _credentialValidationRuns = {};
   bool loading = true, running = false, paused = false;
   bool _disposed = false, _storageHealthy = true;
   String? error;
@@ -776,6 +781,12 @@ class AppController extends ChangeNotifier {
     if (running) pauseTranslation();
     if (settings.email != cleanEmail) {
       _translator.resetProviderState('MyMemory');
+      _invalidateCredentialValidation('MyMemory');
+    }
+    if (settings.apiBaseUrl != cleanBase) {
+      for (final provider in translationProviders) {
+        _invalidateCredentialValidation(provider);
+      }
     }
     settings = AppSettings(
       email: cleanEmail,
@@ -802,6 +813,64 @@ class AppController extends ChangeNotifier {
   bool credentialsSaved(String provider) =>
       _savedCredentialProviders.contains(provider);
   int get providerCredentialRevision => _credentialRevision;
+
+  CredentialValidation credentialValidationFor(String provider) =>
+      _credentialValidations[provider] ??
+      CredentialValidation.unverified(provider);
+
+  void _invalidateCredentialValidation(String provider) {
+    _credentialValidationRuns.remove(provider)?.token.cancel();
+    _credentialValidationVersions[provider] =
+        (_credentialValidationVersions[provider] ?? 0) + 1;
+    _validatedCredentialVersions.remove(provider);
+    _credentialValidations.remove(provider);
+  }
+
+  Future<CredentialValidation> validateProviderCredentials(
+    String provider, {
+    bool force = false,
+  }) {
+    final version = _credentialValidationVersions[provider] ?? 0;
+    final running = _credentialValidationRuns[provider];
+    if (running != null && running.version == version) {
+      return running.completion.future;
+    }
+    if (!force && _validatedCredentialVersions[provider] == version) {
+      return Future.value(credentialValidationFor(provider));
+    }
+    final snapshot = Map<String, String>.from(credentialsFor(provider));
+    if (provider == 'MyMemory' && settings.email.isNotEmpty) {
+      snapshot['email'] = settings.email;
+    }
+    final base = settings.apiBaseUrl;
+    final run = _CredentialValidationRun(version);
+    _credentialValidationRuns[provider] = run;
+    _credentialValidations[provider] = CredentialValidation.checking(provider);
+    _notify();
+    unawaited(() async {
+      CredentialValidation result;
+      try {
+        result = await _translator.validateCredentials(
+          provider,
+          snapshot,
+          apiBaseUrl: base,
+          token: run.token,
+        );
+      } catch (_) {
+        result = CredentialValidation.unavailable(provider);
+      }
+      if (!_disposed &&
+          identical(_credentialValidationRuns[provider], run) &&
+          (_credentialValidationVersions[provider] ?? 0) == version) {
+        _credentialValidationRuns.remove(provider);
+        _credentialValidations[provider] = result;
+        _validatedCredentialVersions[provider] = version;
+        _notify();
+      }
+      run.completion.complete(result);
+    }());
+    return run.completion.future;
+  }
 
   Map<String, String> _cleanCredentials(
     String provider,
@@ -857,21 +926,35 @@ class AppController extends ChangeNotifier {
       cleaned.remove('tenantId');
     }
     if (running) pauseTranslation();
+    final saveVersion = (_credentialSaveVersions[provider] ?? 0) + 1;
+    _credentialSaveVersions[provider] = saveVersion;
+    final changed = !mapEquals(
+      _providerCredentials[provider] ?? const {},
+      cleaned,
+    );
+    if (changed) _invalidateCredentialValidation(provider);
     _providerCredentials[provider] = cleaned;
     if (remember) {
       _savedCredentialProviders.add(provider);
     } else {
       _savedCredentialProviders.remove(provider);
     }
-    _credentialRevision++;
-    _configureTranslator();
+    if (changed) {
+      _credentialRevision++;
+      _configureTranslator();
+    }
     await _persistProviderCredentials();
+    if (_disposed || _credentialSaveVersions[provider] != saveVersion) return;
     message = remember ? '凭据已保存到本机，可随时清除。' : '凭据仅在本次会话使用。';
     _notify();
+    unawaited(validateProviderCredentials(provider));
   }
 
   Future<void> clearProviderCredentials(String provider) async {
     if (running) pauseTranslation();
+    _credentialSaveVersions[provider] =
+        (_credentialSaveVersions[provider] ?? 0) + 1;
+    _invalidateCredentialValidation(provider);
     _providerCredentials.remove(provider);
     _savedCredentialProviders.remove(provider);
     _credentialRevision++;
@@ -927,6 +1010,10 @@ class AppController extends ChangeNotifier {
     _saveTimer?.cancel();
     unawaited(flush());
     _disposed = true;
+    for (final run in _credentialValidationRuns.values) {
+      run.token.cancel();
+    }
+    _credentialValidationRuns.clear();
     _translator.dispose();
     _providerCredentials.clear();
     super.dispose();
@@ -935,6 +1022,13 @@ class AppController extends ChangeNotifier {
 
 List<DocumentBlock> _parseDocument((String, Uint8List) input) =>
     DocumentService().parseBytes(input.$1, input.$2);
+
+class _CredentialValidationRun {
+  _CredentialValidationRun(this.version);
+  final int version;
+  final token = CancelToken();
+  final completion = Completer<CredentialValidation>();
+}
 
 class _Work {
   const _Work(

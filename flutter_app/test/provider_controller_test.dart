@@ -22,12 +22,28 @@ class _ThrowingRemoveStore extends InMemorySharedPreferencesStore {
   }
 }
 
+class _SavedCredentialFixture extends TranslationService {
+  @override
+  Future<CredentialValidation> validateCredentials(
+    String provider,
+    Map<String, String> credentials, {
+    String apiBaseUrl = '',
+    CancelToken? token,
+  }) async => CredentialValidation(
+    provider: provider,
+    status: 'valid',
+    method: 'metadata',
+    billableCharacters: 0,
+    message: 'Mock authorization checked.',
+  );
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late AppController controller;
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
-    controller = AppController();
+    controller = AppController(translator: _SavedCredentialFixture());
     await controller.initialize();
   });
   tearDown(() async {
@@ -218,6 +234,12 @@ void main() {
       controller = AppController(
         translator: TranslationService(
           client: MockClient((request) async {
+            if (request.url.path == '/api/translation/validate') {
+              return http.Response(
+                '{"provider":"DeepL","status":"valid","method":"metadata","billableCharacters":0}',
+                200,
+              );
+            }
             calls++;
             final body = jsonDecode(request.body) as Map;
             expect(body['credentials'], {

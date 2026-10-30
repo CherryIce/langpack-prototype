@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -3559,6 +3560,7 @@ class _WorkspaceState extends State<_Workspace> {
       c.credentialsFor(provider),
     );
     final hasCredentialData = c.credentialsFor(provider).isNotEmpty;
+    final validation = c.credentialValidationFor(provider);
     final description = switch (provider) {
       'MyMemory' => '可匿名使用；联系邮箱与私有词库密钥可选。支持 31 种目标语言；私有词库密钥不代表额度增加。',
       'ZTAITrans' => '自备 API 密钥或开发者访问码；不再提供匿名共享额度。',
@@ -3629,6 +3631,34 @@ class _WorkspaceState extends State<_Workspace> {
                   : '尚未配置凭据',
               style: const TextStyle(fontSize: 11, color: _muted),
             ),
+            const SizedBox(height: 6),
+            Text(
+              '${validation.status == 'checking'
+                  ? '当前验证'
+                  : validation.status == 'unverified'
+                  ? '验证状态'
+                  : '上次验证'}：${validation.label}',
+              key: ValueKey('validation-status-$provider'),
+              style: TextStyle(
+                fontSize: 12,
+                color: validation.status == 'valid'
+                    ? _green
+                    : validation.status == 'invalid'
+                    ? const Color(0xFF9B4B39)
+                    : _muted,
+              ),
+            ),
+            Text(
+              validation.message,
+              style: const TextStyle(fontSize: 11, color: _muted, height: 1.6),
+            ),
+            if (validation.billableCharacters != null)
+              Text(
+                validation.billableCharacters == 1
+                    ? '本次验证最多可能产生 1 字符用量'
+                    : '本次验证字符用量：0',
+                style: const TextStyle(fontSize: 11, color: _muted),
+              ),
             Wrap(
               spacing: 12,
               children: [
@@ -3636,6 +3666,23 @@ class _WorkspaceState extends State<_Workspace> {
                   onPressed: () => _providerCredentialDialog(provider),
                   child: Text('配置 $provider'),
                 ),
+                if (configured || provider == 'MyMemory')
+                  TextButton(
+                    key: ValueKey('revalidate-$provider'),
+                    onPressed: validation.status == 'checking'
+                        ? null
+                        : () => unawaited(
+                            c.validateProviderCredentials(
+                              provider,
+                              force: true,
+                            ),
+                          ),
+                    child: Text(
+                      validation.status == 'checking'
+                          ? '验证中…'
+                          : '重新验证 $provider',
+                    ),
+                  ),
                 if (hasCredentialData)
                   TextButton(
                     onPressed: () =>
@@ -3745,6 +3792,11 @@ class _WorkspaceState extends State<_Workspace> {
                           update(() => plan = value ?? 'free'),
                     ),
                   const SizedBox(height: 12),
+                  const Text(
+                    '保存后自动验证。部分平台将试译“好”→英语，可能产生 1 字符用量；重新验证也可能计费。',
+                    style: TextStyle(fontSize: 11, color: _muted, height: 1.6),
+                  ),
+                  const SizedBox(height: 8),
                   CheckboxListTile(
                     contentPadding: EdgeInsets.zero,
                     value: remember,

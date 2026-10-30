@@ -1291,6 +1291,84 @@ class TranslationService {
     );
   }
 
+  Future<CredentialValidation> validateCredentials(
+    String provider,
+    Map<String, String> credentials, {
+    String apiBaseUrl = '',
+    CancelToken? token,
+  }) async {
+    if (!translationProviders.contains(provider) ||
+        provider != 'MyMemory' &&
+            !providerCredentialsReady(provider, credentials)) {
+      return CredentialValidation(
+        provider: provider,
+        status: 'invalid',
+        message: '请完整填写平台所需的凭据与配置。',
+        billableCharacters: 0,
+      );
+    }
+    try {
+      final response = await _send(
+        _endpoint(apiBaseUrl, '/api/translation/validate'),
+        token: token ?? CancelToken(),
+        timeout: const Duration(seconds: 25),
+        body: jsonEncode({
+          'provider': provider,
+          'credentials': Map<String, String>.from(credentials),
+        }),
+      );
+      final body = _body(response);
+      if (response.statusCode != 200) {
+        return CredentialValidation(
+          provider: provider,
+          status: [400, 401, 403, 422].contains(response.statusCode)
+              ? 'invalid'
+              : 'unavailable',
+          message: '验证请求未完成，请检查平台配置或代理连接后重试。本次验证用量未确认。',
+        );
+      }
+      final status = body?['status'],
+          method = body?['method'],
+          billable = body?['billableCharacters'];
+      final expectedMethod =
+          provider == 'MyMemory' && (credentials['apiKey'] ?? '').isEmpty
+          ? 'anonymous'
+          : ['DeepL', 'Google'].contains(provider)
+          ? 'metadata'
+          : 'translation';
+      if (body?['provider'] != provider ||
+          !['valid', 'invalid', 'limited', 'unavailable'].contains(status) ||
+          method != expectedMethod ||
+          billable is! int ||
+          billable != (expectedMethod == 'translation' ? 1 : 0)) {
+        return CredentialValidation.unavailable(provider);
+      }
+      // Keep provider errors and reflected credentials out of user-visible messages.
+      final message = switch (status) {
+        'valid' =>
+          method == 'metadata'
+              ? '授权或目录接口验证通过，未验证所有目标语言的实际翻译。'
+              : method == 'anonymous'
+              ? '匿名模式无需凭据，未检查翻译服务或剩余额度。'
+              : provider == 'MyMemory'
+              ? '单字试译成功，不能据此确认私有词库权限。'
+              : '最短试译成功，剩余额度与套餐以平台控制台为准。',
+        'invalid' => '平台未接受这些凭据或配置，请检查后重新验证。',
+        'limited' => '平台可能受频率、余额或额度限制，本次无法确认是否可用，请稍后重验或检查控制台。',
+        _ => '平台暂时未能完成验证，请稍后重新验证。',
+      };
+      return CredentialValidation(
+        provider: provider,
+        status: status as String,
+        method: method as String,
+        billableCharacters: billable,
+        message: message,
+      );
+    } catch (_) {
+      return CredentialValidation.unavailable(provider);
+    }
+  }
+
   Future<bool> checkBackup(
     String apiBaseUrl, {
     String developerToken = '',

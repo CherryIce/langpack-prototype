@@ -41,6 +41,10 @@ ZTAITrans 不再提供匿名共享授权；开发者访问码通过服务端验�
 
 凭据默认只保留在本次应用会话。只有在配置窗口明确勾选“在本机保存凭据”才写入独立本地存储；该存储不提供额外加密，共享设备请保持关闭。取消本机保存会移除此前保存的副本，“清除”同时删除会话及本机副本。平台顺序和备用开关可以独立持久化，修改邮箱或导出设置不会丢失它们；邮箱身份变更仅清除 MyMemory 的冷却和请求缓存，不影响其他平台。旧版项目的成功译文继续复用，不会因新增平台强制重译。
 
+保存凭据成功后，会后台执行一次独立验证，不上传项目文案。保存前会提示：部分平台使用固定的“好”→英语最短试译，最多可能产生 1 字符用量；这一数字是探测长度，不是扣费回执。DeepL 用量接口和 Google 语言目录用于免试译的授权检查，不代表所有目标都能翻译；MyMemory 匿名模式无需密钥，本次不检测服务；私有 MyMemory key 的单字试译成功，也不能单独证明私有词库权限。其余平台（包括 ZTAITrans 开发者访问码）使用单字探测。
+
+设置页分别显示保存状态与“上次验证”结果，并区分授权检查通过、单字试译通过、无效、限流/余额/额度受限、网络或服务暂不可验证。网络错误不撤销已经成功的保存，也不会被误称为凭据无效。验证不重试、不切换账户，客户端等待上限 25 秒。相同凭据仅切换是否在本机保存，会复用本次会话已有结果或进行中的请求，避免重复试译；“重新验证”才会再次请求。改凭据、清除、修改邮箱或代理地址会使对应旧结果失效，迟到响应不会覆盖新状态。验证结果不写入项目、任务、导出或本机凭据区，重启恢复凭据后显示尚未验证，且不会自动发起试译。
+
 原生 App 默认连接 `https://langpack-standalone.406859116.workers.dev`；空地址使用该内置代理，显式自定义地址保留。Flutter Web 使用部署站点的同源代理。新增平台功能需部署对应服务端并更新客户端，源码变更不代表线上或已安装版本已更新。
 
 在 `flutter_app/` 构建：
@@ -131,7 +135,7 @@ flutter analyze
 flutter test
 ```
 
-`provider_service_test.dart`、`provider_controller_test.dart`、`domestic_provider_test.dart`、`domestic_widget_test.dart` 与 `widget_test.dart` 使用模拟响应验证多平台路由、凭据隔离、冷却恢复、分段、设置及增量复用，不调用真实接口。`live_smoke_test.dart` 默认关闭；只有明确开启 `RUN_LIVE_TRANSLATION` 或 `RUN_PUBLIC_PROXY_TEST` 时才可能调用真实服务并消耗额度。ZTAITrans 的真实备用流程还需通过受控运行环境提供 `LANGPACK_ZTAI_API_KEY` 或 `LANGPACK_DEVELOPER_TOKEN`，不能通过客户端构建参数嵌入密钥。没有凭据时不会运行真实备用用例。
+`provider_service_test.dart`、`provider_controller_test.dart`、`domestic_provider_test.dart`、`domestic_widget_test.dart`、`credential_validation_test.dart`、`credential_validation_widget_test.dart` 与 `widget_test.dart` 使用模拟响应验证多平台路由、凭据隔离、冷却恢复、分段、设置及增量复用，不调用真实接口。`live_smoke_test.dart` 默认关闭；只有明确开启 `RUN_LIVE_TRANSLATION` 或 `RUN_PUBLIC_PROXY_TEST` 时才可能调用真实服务并消耗额度。ZTAITrans 的真实备用流程还需通过受控运行环境提供 `LANGPACK_ZTAI_API_KEY` 或 `LANGPACK_DEVELOPER_TOKEN`，不能通过客户端构建参数嵌入密钥。没有凭据时不会运行真实备用用例。
 
 在对应宿主机与工具链上执行：
 

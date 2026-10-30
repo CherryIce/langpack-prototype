@@ -301,11 +301,65 @@ function genericOutput(provider, payload, locale, credentials, source) {
   return text;
 }
 
+const validationMethod = provider => ['DeepL', 'Google'].includes(provider) ? 'metadata' : 'translation';
+function validationResult(provider, status, method, message) {
+  // No translated text, raw diagnostics, tokens or usage/account identifiers are
+  // returned. The character figure describes the fixed probe, not a bill receipt.
+  return json({ provider, status, method, billableCharacters: method === 'translation' ? 1 : 0, message });
+}
+async function validateCredentials({ request, provider, credentials, fetchImpl, timeoutMs }) {
+  const method = validationMethod(provider), controller = new AbortController();
+  const onAbort = () => controller.abort();
+  request.signal.addEventListener('abort', onAbort, { once: true });
+  if (request.signal.aborted) controller.abort();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const unavailable = () => validationResult(provider, 'unavailable', method, '本次未能完成平台验证，请稍后手动重试；这不代表凭据无效。');
+  try {
+    let upstream;
+    if (provider === 'DeepL') upstream = { url: `https://${credentials.plan === 'pro' ? 'api' : 'api-free'}.deepl.com/v2/usage`, method: 'GET', headers: { Authorization: 'DeepL-Auth-Key ' + credentials.apiKey, Accept: 'application/json' } };
+    else if (provider === 'Google') upstream = { url: 'https://translation.googleapis.com/language/translate/v2/languages?model=nmt', method: 'GET', headers: { 'X-Goog-Api-Key': credentials.apiKey, Accept: 'application/json' } };
+    else upstream = await providerUpstream(provider, credentials, '好', 'en');
+    if (provider === 'MyMemory' && request.cf && request.headers.get('CF-Connecting-IP')) {
+      const endpoint = new URL(upstream.url); endpoint.searchParams.set('ip', request.headers.get('CF-Connecting-IP')); upstream.url = endpoint.href;
+    }
+    if (controller.signal.aborted) return unavailable();
+    const response = await abortRace(fetchImpl(upstream.url, { method: upstream.method || 'POST', headers: upstream.headers, ...(upstream.method !== 'GET' ? { body: upstream.encodedBody ?? JSON.stringify(upstream.body) } : {}), redirect: 'manual', signal: controller.signal }), controller.signal);
+    let payload;
+    try { payload = JSON.parse(await abortRace(readBounded(response, MAX_RESPONSE_BYTES, controller.signal), controller.signal)); }
+    catch (error) { if (controller.signal.aborted) throw error; payload = null; }
+    const failure = provider === 'ZTAITrans' ? upstreamFailure(response, payload) : genericUpstreamFailure(provider, response, payload);
+    if (failure) {
+      const diagnostic = await failure.json();
+      if ([402, 429].includes(failure.status)) return validationResult(provider, 'limited', method, failure.status === 402 ? '平台返回额度或余额不足，暂时无法确认可翻译。' : '平台正在限流，本次无法判断凭据是否可用，请稍后手动重试。');
+      if (failure.status === 401 || diagnostic.fatal || ['BACKUP_DISABLED', 'BACKUP_NOT_CONFIGURED'].includes(diagnostic.code)) return validationResult(provider, 'invalid', method, '平台授权或服务配置未通过验证，请检查凭据、区域、权限及服务是否开通。');
+      if (failure.status >= 500) return unavailable();
+      return validationResult(provider, 'invalid', method, '平台拒绝了这次验证，请检查凭据与账户服务配置。');
+    }
+    if (provider === 'DeepL') {
+      const number = value => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+      if (!number(payload?.character_count) || !number(payload?.character_limit)) return unavailable();
+      const hasKeyUsage = payload.api_key_character_count !== undefined || payload.api_key_character_limit !== undefined;
+      if (hasKeyUsage && (!number(payload.api_key_character_count) || !number(payload.api_key_character_limit))) return unavailable();
+      if (payload.character_count >= payload.character_limit || hasKeyUsage && payload.api_key_character_count >= payload.api_key_character_limit) return validationResult(provider, 'limited', method, '凭据通过用量接口授权，但账户或此密钥的字符限额已用完。');
+      return validationResult(provider, 'valid', method, '用量接口授权检查通过，未试译；当前统计有剩余额度，具体翻译权限及计费以平台为准。');
+    }
+    if (provider === 'Google') {
+      const languages = payload?.data?.languages;
+      if (!Array.isArray(languages) || !languages.length || !languages.every(item => plainObject(item) && typeof item.language === 'string' && /^[a-z]{2,3}(?:-[A-Za-z]{2,8})?$/.test(item.language)) || !languages.some(item => item.language === 'en')) return unavailable();
+      return validationResult(provider, 'valid', method, '语言目录授权检查通过，未试译；实际翻译仍受账户结算、配额与权限限制。');
+    }
+    const text = provider === 'ZTAITrans' ? validOutput(payload, '好', 'en', credentials.apiKey) : genericOutput(provider, payload, 'en', credentials, '好');
+    if (text === null) return unavailable();
+    return validationResult(provider, 'valid', method, provider === 'MyMemory' ? '单字试译通过；这不单独证明 MyMemory 私有词库的访问权限。' : '单字试译通过，当前凭据可以完成这次翻译请求；其他语言和后续额度仍以平台为准。');
+  } catch (_) { return unavailable(); }
+  finally { clearTimeout(timer); request.signal.removeEventListener('abort', onAbort); }
+}
+
 export function createHandler({ fetchImpl = (...args) => fetch(...args), timeoutMs = 600000 } = {}) {
   const limit = Math.max(1, Math.min(600000, Number(timeoutMs) || 600000));
   return async function handle(request, env = {}, _ctx) {
     const url = new URL(request.url);
-    if (!['/api/translation/status', '/api/translation/backup', '/api/translation/provider'].includes(url.pathname)) return null;
+    if (!['/api/translation/status', '/api/translation/backup', '/api/translation/provider', '/api/translation/validate'].includes(url.pathname)) return null;
     const serverKey = typeof env.TRANSLATION_API_KEY === 'string' ? env.TRANSLATION_API_KEY.trim() : '';
     const developerConfigured = !!serverKey && typeof env.LANGPACK_DEVELOPER_TOKEN === 'string' && env.LANGPACK_DEVELOPER_TOKEN.length >= 24;
     if (url.pathname === '/api/translation/status') {
@@ -314,6 +368,7 @@ export function createHandler({ fetchImpl = (...args) => fetch(...args), timeout
       return json({ backupConfigured: !!authorized, backupProvider: 'ZTAITrans', developerConfigured, developerAccessRequired: true, userCredentialsRequired: true, providers: PROVIDER_NAMES });
     }
     const legacy = url.pathname === '/api/translation/backup';
+    const validating = url.pathname === '/api/translation/validate';
     if (request.method !== 'POST') return problem(405, 'METHOD_NOT_ALLOWED', '此接口只接受 POST 请求。');
     const origin = request.headers.get('Origin'), site = request.headers.get('Sec-Fetch-Site');
     if (origin !== null && origin !== url.origin || site !== null && !['same-origin', 'none'].includes(site)) return problem(403, 'BACKUP_ORIGIN', '仅允许从当前工作台发起翻译请求。');
@@ -322,26 +377,31 @@ export function createHandler({ fetchImpl = (...args) => fetch(...args), timeout
     if (legacy && (!developerConfigured || !await developerAuthorized(request.headers.get('X-LangPack-Developer-Token'), env))) return problem(401, 'PROVIDER_AUTH', '开发者共享服务需要访问口令，请配置自己的平台密钥或更新客户端。', { fatal: true });
     if (request.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase() !== 'application/json') return problem(415, 'BACKUP_CONTENT_TYPE', '请使用 JSON 格式提交翻译内容。');
     let body;
-    try { body = JSON.parse(await readBounded(request, MAX_REQUEST_BYTES, request.signal)); }
+    try { body = JSON.parse(await readBounded(request, validating ? 16 * 1024 : MAX_REQUEST_BYTES, request.signal)); }
     catch (error) {
       if (request.signal.aborted || error.code === 'ABORTED') return problem(499, legacy ? 'BACKUP_ABORTED' : 'PROVIDER_ABORTED', '翻译请求已取消。');
       if (error.code === 'TOO_LARGE') return problem(413, 'BACKUP_TOO_LARGE', '这段内容超过请求大小限制，请拆分后重试。');
       return problem(400, 'BACKUP_JSON', '翻译请求不是有效的 JSON。');
     }
-    const allowed = legacy ? ['content', 'locale'] : ['provider', 'content', 'locale', 'credentials'];
+    const allowed = legacy ? ['content', 'locale'] : validating ? ['provider', 'credentials'] : ['provider', 'content', 'locale', 'credentials'];
     if (!plainObject(body) || Object.keys(body).some(key => !allowed.includes(key))) return problem(400, 'BACKUP_FIELDS', '请求中包含不支持的字段。');
     const provider = legacy ? 'ZTAITrans' : body.provider;
     if (!PROVIDER_NAMES.includes(provider)) return problem(400, 'PROVIDER_CONFIG', '请选择支持的翻译平台。', { fatal: true });
+    // Probe content and language can never be supplied by callers. No retries,
+    // account fallback, project writes or translation cache are involved.
+    if (validating) body = { ...body, content: '好', locale: 'en' };
     if (typeof body.content !== 'string' || !body.content.trim()) return providerProblem(provider, 400, legacy ? 'BACKUP_EMPTY' : 'PROVIDER_REQUEST', '请先提供需要翻译的原文。');
     if (Array.from(body.content).length > MAX_CONTENT_CHARACTERS) return providerProblem(provider, 413, 'BACKUP_TOO_LARGE', '单段原文不能超过 50,000 个字符，请拆分后重试。');
     if (typeof body.locale !== 'string' || !Object.hasOwn(TARGETS, body.locale)) return providerProblem(provider, 400, legacy ? 'BACKUP_LANGUAGE' : 'PROVIDER_UNSUPPORTED', '当前目标语言不受支持。', { unsupported: true });
     if (provider !== 'ZTAITrans' && !Object.hasOwn(PROVIDER_LOCALES[provider], body.locale)) return providerProblem(provider, 400, 'PROVIDER_UNSUPPORTED', '此平台不支持该目标语言的精确代码，请选择其他已配置平台。', { unsupported: true });
     let credentials = legacy ? { apiKey: serverKey } : body.credentials;
+    if (validating && provider === 'MyMemory' && plainObject(credentials) && (credentials.apiKey === undefined || credentials.apiKey === '') && credentialShape(provider, { ...credentials, apiKey: 'anonymous-validation-placeholder' })) return validationResult(provider, 'valid', 'anonymous', '匿名模式无需 API 密钥，本次未调用平台或验证私有词库。');
     if (!credentialShape(provider, credentials)) return providerProblem(provider, 400, 'PROVIDER_CONFIG', '请完整配置该平台自己的凭据。', { fatal: true });
     if (provider === 'ZTAITrans' && credentials.developerToken !== undefined) {
       if (!developerConfigured || !await developerAuthorized(credentials.developerToken, env)) return providerProblem(provider, 401, 'PROVIDER_AUTH', '开发者访问口令无效或尚未配置。', { fatal: true });
       credentials = { apiKey: serverKey };
     }
+    if (validating) return validateCredentials({ request, provider, credentials, fetchImpl, timeoutMs: Math.min(limit, 20000) });
     const contentBytes = new TextEncoder().encode(body.content).byteLength;
     const characterLimit = { Baidu: 1000, Tencent: 2000, Alibaba: 5000 }[provider];
     if (characterLimit && Array.from(body.content).length > characterLimit || provider === 'Baidu' && contentBytes > 6000) return providerProblem(provider, 413, 'BACKUP_TOO_LARGE', '这段内容超过该平台单次请求限制，请拆分后重试。');

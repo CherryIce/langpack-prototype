@@ -13,6 +13,19 @@ import 'package:langpack/ui/app.dart';
 
 class _FixtureTranslation extends TranslationService {
   @override
+  Future<CredentialValidation> validateCredentials(
+    String provider,
+    Map<String, String> credentials, {
+    String apiBaseUrl = '',
+    CancelToken? token,
+  }) async => CredentialValidation(
+    provider: provider,
+    status: 'valid',
+    method: 'metadata',
+    billableCharacters: 0,
+    message: 'Mock authorization checked.',
+  );
+  @override
   Future<TranslationResult> translate(
     String source,
     String locale, {
@@ -95,6 +108,12 @@ void main() {
         'widget_session_fixture',
       );
       expect(controller.credentialsSaved('DeepL'), isFalse);
+      expect(
+        tester
+            .widget<Text>(find.byKey(const ValueKey('validation-status-DeepL')))
+            .data,
+        '上次验证：授权检查通过（未试译）',
+      );
       expect(find.text('widget_session_fixture'), findsNothing);
       expect(
         (await SharedPreferences.getInstance()).getString(

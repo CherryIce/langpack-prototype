@@ -305,6 +305,17 @@ void main() {
         final controller = AppController(
           translator: TranslationService(
             client: MockClient((request) async {
+              if (request.url.path == '/api/translation/validate') {
+                return http.Response(
+                  jsonEncode({
+                    'provider': provider,
+                    'status': 'valid',
+                    'method': 'translation',
+                    'billableCharacters': 1,
+                  }),
+                  200,
+                );
+              }
               requests++;
               return translated(provider, 'Login');
             }),

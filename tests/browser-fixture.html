@@ -7,14 +7,27 @@
   <link rel="stylesheet" href="../web/styles.css">
   <script>
     // Test-only provider fixture. This file is outside the deployed static directory.
-    let recovered = false, calls = 0;
+    let recovered = false, calls = 0, validationCalls = 0;
     window.fetch = async function (url, options = {}) {
       const request = new URL(url, window.location.href);
       if (request.pathname === '/api/translation/status') return new Response(JSON.stringify({ developerConfigured: true, backupConfigured: options.headers?.['X-LangPack-Developer-Token'] === 'fixture-developer' }));
+      if (request.pathname === '/api/translation/validate') {
+        const body = JSON.parse(options.body);
+        validationCalls++;
+        document.getElementById('fixture-validation-count').textContent = '校验请求数：' + validationCalls;
+        const method = body.provider === 'MyMemory' && !body.credentials.apiKey ? 'anonymous' : ['DeepL', 'Google'].includes(body.provider) ? 'metadata' : 'translation';
+        document.getElementById('fixture-log').textContent += JSON.stringify({ operation: 'validate', provider: body.provider, method, testCharacters: method === 'translation' ? 1 : 0 }) + '\n';
+        await new Promise((resolve, reject) => {
+          const timer = setTimeout(resolve, 800);
+          options.signal?.addEventListener('abort', () => { clearTimeout(timer); reject(new DOMException('Aborted', 'AbortError')); }, { once: true });
+        });
+        const invalid = Object.values(body.credentials).some(value => typeof value === 'string' && value.includes('invalid'));
+        return new Response(JSON.stringify({ provider: body.provider, status: invalid ? 'invalid' : 'valid', message: 'Fixture validation only', method, billableCharacters: method === 'translation' ? 1 : 0 }));
+      }
       if (request.pathname === '/api/translation/provider') {
         const body = JSON.parse(options.body);
         calls++;
-        document.getElementById('fixture-count').textContent = '测试请求数：' + calls;
+        document.getElementById('fixture-count').textContent = '文案翻译请求数：' + calls;
         document.getElementById('fixture-log').textContent += JSON.stringify({ provider: body.provider, locale: body.locale, characters: Array.from(body.content).length }) + '\n';
         if (!recovered && /失败/.test(body.content)) return new Response(JSON.stringify({ provider: body.provider, code: 'PROVIDER_AUTH', fatal: true }), { status: 401 });
         const tokens = body.content.match(/ZXQ(?:PH|NL)\d+QXZ/g) || [];
@@ -28,7 +41,7 @@
       });
       calls++;
       const source = request.searchParams.get('q'), pair = request.searchParams.get('langpair');
-      document.getElementById('fixture-count').textContent = '测试请求数：' + calls;
+      document.getElementById('fixture-count').textContent = '文案翻译请求数：' + calls;
       document.getElementById('fixture-log').textContent += JSON.stringify({ source, pair, bytes: new TextEncoder().encode(source).length }) + '\n';
       const failure = /失败/.test(source) && !recovered;
       const markers = source.match(/ZXQPH\d+QXZ/g) || [];
@@ -48,7 +61,7 @@
 </head>
 <body>
   <div id="app"></div><div id="toast" class="toast" role="status"></div><dialog id="modal"></dialog>
-  <div style="position:fixed;top:0;right:0;z-index:300;background:#fff5dc;font-size:10px;padding:4px 8px;display:flex;gap:8px"><span>8 平台测试夹具 · 只填虚构凭据 · 开发者测试口令 fixture-developer</span><span id="fixture-count">测试请求数：0</span><button id="fixture-recover">使失败项恢复</button></div>
+  <div style="position:fixed;top:0;right:0;z-index:300;background:#fff5dc;font-size:10px;padding:4px 8px;display:flex;gap:8px;flex-wrap:wrap"><span>8 平台测试夹具 · 只填虚构凭据 · 开发者测试口令 fixture-developer</span><span id="fixture-count">文案翻译请求数：0</span><span id="fixture-validation-count">校验请求数：0</span><button id="fixture-recover">使失败项恢复</button></div>
   <pre id="fixture-log" hidden></pre>
 </body>
 </html>

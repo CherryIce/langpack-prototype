@@ -43,6 +43,53 @@ bool providerCredentialsReady(String provider, Map<String, String> values) {
   };
 }
 
+class CredentialValidation {
+  const CredentialValidation({
+    required this.provider,
+    required this.status,
+    required this.message,
+    this.method,
+    this.billableCharacters,
+  });
+  final String provider;
+  final String status;
+  final String message;
+  final String? method;
+  final int? billableCharacters;
+
+  String get label => switch (status) {
+    'checking' => '验证中',
+    'valid' =>
+      method == 'metadata'
+          ? '授权检查通过（未试译）'
+          : method == 'translation'
+          ? '单字试译通过'
+          : '匿名模式无需密钥',
+    'invalid' => '凭据或配置无效',
+    'limited' => '本次验证受限',
+    'unavailable' => '暂未验证成功',
+    _ => '尚未验证',
+  };
+  factory CredentialValidation.unverified(String provider) =>
+      CredentialValidation(
+        provider: provider,
+        status: 'unverified',
+        message: '本次会话尚未验证这些凭据。',
+      );
+  factory CredentialValidation.checking(String provider) =>
+      CredentialValidation(
+        provider: provider,
+        status: 'checking',
+        message: '正在验证；部分平台可能产生 1 字符试译用量。',
+      );
+  factory CredentialValidation.unavailable(String provider) =>
+      CredentialValidation(
+        provider: provider,
+        status: 'unavailable',
+        message: '未能取得有效验证结果，请稍后重新验证。本次验证用量未确认。',
+      );
+}
+
 List<String> normalizeProviderOrder(Iterable<dynamic> values) {
   final result = values
       .whereType<String>()

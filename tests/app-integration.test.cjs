@@ -61,7 +61,7 @@ function boot(saved, translate = async () => { throw new Error('Unexpected trans
     fetch: options.fetch || (async () => { throw new Error('Unexpected fetch in app fixture'); }),
     TextEncoder, TextDecoder, AbortController, Blob, URL, crypto: webcrypto,
     console: { log() {}, warn() {}, error(...args) { errors.push(args); } },
-    setTimeout(callback, ms) { const timer = setTimeout(() => { timers.delete(timer); callback(); }, Math.min(ms, 10)); timers.add(timer); return timer; },
+    setTimeout(callback, ms) { const duration = ms === 30000 ? options.validationTimeoutMs ?? 1000 : Math.min(ms, 10); const timer = setTimeout(() => { timers.delete(timer); callback(); }, duration); timers.add(timer); return timer; },
     clearTimeout(timer) { timers.delete(timer); clearTimeout(timer); }
   });
   context.window = context; context.addEventListener = () => {}; context.scrollTo = () => {};
@@ -73,7 +73,7 @@ function boot(saved, translate = async () => { throw new Error('Unexpected trans
   context.MyMemoryTranslator = { createClient: config => { options.onPrimaryConfig?.(config); return { async translate(...args) { const result = await translate(...args); return { provider: 'MyMemory', ...result }; } }; }, utf8Length: value => new TextEncoder().encode(value).length };
   vm.runInContext(code('translation-service.js'), context);
   const service = context.TranslationService;
-  context.TranslationService = { ...service, createProviderClient: args => args.provider === 'ZTAITrans' && options.backupTranslate ? { translate: options.backupTranslate } : service.createProviderClient({ ...args, maxRetries: 0, fetchImpl: options.providerFetch || options.backupFetch || (async () => { throw Object.assign(new Error('No provider request expected'), { code: 'PROVIDER_CONFIG', fatal: true }); }) }) };
+  context.TranslationService = { ...service, createProviderClient: args => { options.onProviderClient?.(args); return args.provider === 'ZTAITrans' && options.backupTranslate ? { translate: options.backupTranslate } : service.createProviderClient({ ...args, maxRetries: 0, fetchImpl: options.providerFetch || options.backupFetch || (async () => { throw Object.assign(new Error('No provider request expected'), { code: 'PROVIDER_CONFIG', fatal: true }); }) }); } };
   vm.runInContext(code('app.js'), context);
   return {
     state: () => JSON.parse(values.get(STORAGE)), html: () => html, errors, localValues: values, sessionValues,
@@ -85,6 +85,9 @@ function boot(saved, translate = async () => { throw new Error('Unexpected trans
     async input(id, value) { const target = this.field(id, value); for (const handler of handlers.get('input') || []) await handler({ target }); },
     async change(target) { for (const handler of handlers.get('change') || []) await handler({ target }); },
     content(id) { return element(id).innerHTML; },
+    text(id) { return element(id).textContent; },
+    value(id) { return element(id).value; },
+    disabled(id) { return element(id).disabled; },
     async editDocumentSource(index, value) { const target = { value, dataset: { docSource: String(index) } }; for (const handler of handlers.get('input') || []) await handler({ target }); },
     close() { for (const timer of timers) clearTimeout(timer); },
     engine: context.LangPackEngine
@@ -640,4 +643,130 @@ test('domestic platform forms save exact BYOK pairs, retain secrets outside proj
     await app.click('project', { id: 'a' }); await app.click('translate-project'); await app.click('start-translation'); await until(() => app.state().session.status === 'completed');
     assert.equal(requests.length, 1); assert.equal(app.state().jobs[0].items[0].reused, true);
   });
+});
+
+test('saving each of the eight platform cards validates the saved snapshot once and keeps the result separate from storage and translation tasks', async t => {
+  const forms = {
+    MyMemory: { key: 'fixture-memory-private' }, ZTAITrans: { key: 'fixture-ztai-private', mode: 'apiKey', tenant: 'fixture-tenant' },
+    DeepL: { key: 'fixture-deepl-private', plan: 'free' }, Azure: { key: 'fixture-azure-private', region: 'eastasia' }, Google: { key: 'fixture-google-private' },
+    Baidu: { appId: 'fixture-baidu-app', secretKey: 'fixture-baidu-private' }, Tencent: { secretId: 'fixture-tencent-id', secretKey: 'fixture-tencent-private', region: 'ap-guangzhou' }, Alibaba: { accessKeyId: 'fixture-alibaba-id', accessKeySecret: 'fixture-alibaba-private' }
+  };
+  for (const [provider, fields] of Object.entries(forms)) await t.test(provider, async () => {
+    const saved = fixture(['en']); saved.settings.providerOrder = [provider];
+    const calls = [];
+    const app = boot(saved, undefined, { sessionValues: new Map(), fetch: async (url, options) => {
+      const body = JSON.parse(options.body); calls.push({ url, options, body });
+      const method = ['DeepL', 'Google'].includes(provider) ? 'metadata' : 'translation';
+      return new Response(JSON.stringify({ provider, status: 'valid', message: Object.values(fields).join(' '), method, billableCharacters: method === 'translation' ? 1 : 0 }));
+    }, providerFetch: async () => assert.fail('Validation must not invoke the translation client') }); t.after(() => app.close());
+    await app.click('nav', { view: 'settings' });
+    for (const [field, value] of Object.entries(fields)) app.field(`provider-${provider}-${field}`, value);
+    await app.click('save-provider-credentials', { provider });
+    assert.equal(calls.length, 1); assert.equal(calls[0].url, '/api/translation/validate'); assert.equal(calls[0].options.method, 'POST');
+    assert.deepEqual(Object.keys(calls[0].body).sort(), ['credentials', 'provider']); assert.equal(calls[0].body.provider, provider);
+    const vault = JSON.parse(app.sessionValues.get('langpack-provider-session-v1')); assert.deepEqual(calls[0].body.credentials, vault[provider]);
+    const feedback = app.content(`provider-${provider}-feedback`);
+    assert.match(feedback, /仅保留在当前标签页会话/); assert.match(feedback, /上次校验尝试/);
+    assert.match(feedback, ['DeepL', 'Google'].includes(provider) ? /授权检查通过，本次未试译/ : /上次单字试译通过/);
+    for (const value of Object.values(fields).filter(value => value.startsWith('fixture-'))) { assert.doesNotMatch(feedback, new RegExp(value)); assert.doesNotMatch(JSON.stringify(app.state()), new RegExp(value)); }
+    assert.equal(app.state().jobs.length, 0); assert.equal(app.state().exports.length, 0); assert.equal(app.disabled(`provider-${provider}-save`), false);
+  });
+});
+
+test('anonymous MyMemory validation records no trial and does not claim that the service was checked', async t => {
+  const app = boot(fixture(['en']), undefined, { sessionValues: new Map(), fetch: async () => new Response(JSON.stringify({ provider: 'MyMemory', status: 'valid', method: 'anonymous', billableCharacters: 0, message: 'must not be rendered' })) }); t.after(() => app.close());
+  await app.click('nav', { view: 'settings' }); await app.click('save-provider-credentials', { provider: 'MyMemory' });
+  assert.match(app.content('provider-MyMemory-feedback'), /无需私有凭据.*未检查服务、未试译/);
+  assert.doesNotMatch(app.content('provider-MyMemory-feedback'), /1 字符|must not be rendered/);
+});
+
+test('validation failures keep credentials saved and classify transport errors without rendering private response strings', async t => {
+  const secret = 'fixture-private-validation-key';
+  for (const [name, responseFactory, expected] of [
+    ['invalid', () => new Response(JSON.stringify({ provider: 'Azure', status: 'invalid', method: 'translation', billableCharacters: 1, message: secret })), 'invalid'],
+    ['limited', () => new Response(JSON.stringify({ provider: 'Azure', status: 'limited', method: 'translation', billableCharacters: 1, message: secret })), 'limited'],
+    ['network', () => { throw new Error(secret); }, 'unavailable'],
+    ['unauthorized', () => new Response(secret, { status: 401 }), 'invalid'],
+    ['bad request', () => new Response(secret, { status: 400 }), 'invalid'],
+    ['forbidden', () => new Response(secret, { status: 403 }), 'invalid'],
+    ['invalid shape', () => new Response(secret, { status: 422 }), 'invalid'],
+    ['quota', () => new Response(secret, { status: 402 }), 'limited'],
+    ['rate limited', () => new Response(secret, { status: 429 }), 'limited'],
+    ['server unavailable', () => new Response(secret, { status: 503 }), 'unavailable'],
+    ['wrong provider', () => new Response(JSON.stringify({ provider: 'Google', status: 'valid', method: 'metadata', billableCharacters: 0, message: secret })), 'unavailable'],
+    ['wrong method', () => new Response(JSON.stringify({ provider: 'Azure', status: 'valid', method: 'metadata', billableCharacters: 0, message: secret })), 'unavailable'],
+    ['wrong character count', () => new Response(JSON.stringify({ provider: 'Azure', status: 'valid', method: 'translation', billableCharacters: 0, message: secret })), 'unavailable']
+  ]) await t.test(name, async () => {
+    let calls = 0;
+    const app = boot(fixture(['en']), undefined, { sessionValues: new Map(), fetch: async () => { calls++; return responseFactory(); } }); t.after(() => app.close());
+    await app.click('nav', { view: 'settings' }); app.field('provider-Azure-key', secret); app.field('provider-Azure-region', 'eastasia'); await app.click('save-provider-credentials', { provider: 'Azure' });
+    assert.equal(calls, 1); assert.match(app.sessionValues.get('langpack-provider-session-v1'), new RegExp(secret));
+    const feedback = app.content('provider-Azure-feedback'); assert.match(feedback, new RegExp(`data-validation-status="${expected}"`));
+    assert.match(feedback, /仅保留在当前标签页会话/); assert.doesNotMatch(feedback, new RegExp(secret)); assert.doesNotMatch(JSON.stringify(app.state()), new RegExp(secret)); assert.deepEqual(app.errors, []);
+  });
+});
+
+test('validation disables repeat submissions and patches feedback without clearing another card input', async t => {
+  const pending = deferred(); let calls = 0;
+  const app = boot(fixture(['en']), undefined, { sessionValues: new Map(), fetch: async () => { calls++; return pending.promise; } }); t.after(() => app.close());
+  await app.click('nav', { view: 'settings' }); app.field('provider-Azure-key', 'fixture-azure-key'); app.field('provider-Azure-region', 'eastasia');
+  const saving = app.click('save-provider-credentials', { provider: 'Azure' });
+  assert.equal(app.disabled('provider-Azure-save'), true); assert.match(app.content('provider-Azure-feedback'), /正在验证当前已保存的配置/);
+  await app.click('save-provider-credentials', { provider: 'Azure' }); await app.click('validate-provider', { provider: 'Azure' }); assert.equal(calls, 1);
+  app.field('provider-Google-key', 'fixture-unsaved-google-key');
+  pending.resolve(new Response(JSON.stringify({ provider: 'Azure', status: 'valid', method: 'translation', billableCharacters: 1 })));
+  await saving;
+  assert.equal(app.disabled('provider-Azure-save'), false); assert.equal(app.value('provider-Google-key'), 'fixture-unsaved-google-key');
+  assert.match(app.content('provider-Azure-feedback'), /上次单字试译通过/);
+});
+
+test('same credentials with only a storage preference change reuse the session result; explicit revalidation does not reset translation clients', async t => {
+  const saved = fixture(['en']); saved.settings.providerOrder = ['Azure']; let validations = 0, translations = 0, clients = 0;
+  const app = boot(saved, undefined, { sessionValues: new Map(), onProviderClient() { clients++; }, fetch: async () => { validations++; return new Response(JSON.stringify({ provider: 'Azure', status: 'valid', method: 'translation', billableCharacters: 1 })); }, providerFetch: async () => { translations++; return new Response(JSON.stringify({ provider: 'Azure', text: 'Saved translation' })); } }); t.after(() => app.close());
+  await app.click('nav', { view: 'settings' }); app.field('provider-Azure-key', 'fixture-azure-key'); app.field('provider-Azure-region', 'eastasia'); await app.click('save-provider-credentials', { provider: 'Azure' });
+  app.field('provider-Azure-remember', '').checked = true; await app.click('save-provider-credentials', { provider: 'Azure' });
+  assert.equal(validations, 1); assert.match(app.content('provider-Azure-feedback'), /已保存到本机浏览器/);
+  await app.click('project', { id: 'a' }); await app.click('translate-project'); await app.click('start-translation'); await until(() => app.state().session.status === 'completed');
+  assert.equal(clients, 1); assert.equal(translations, 1);
+  await app.click('nav', { view: 'settings' }); const before = JSON.stringify(app.state()); const vaultBefore = app.localValues.get('langpack-provider-credentials-v1');
+  await app.click('validate-provider', { provider: 'Azure' }); assert.equal(validations, 2); assert.equal(JSON.stringify(app.state()), before); assert.equal(app.localValues.get('langpack-provider-credentials-v1'), vaultBefore);
+  await app.click('project', { id: 'a' }); await app.click('translate-project'); await app.click('start-translation'); await until(() => app.state().session.status === 'completed');
+  assert.equal(clients, 1); assert.equal(translations, 1);
+});
+
+test('validation snapshots and per-platform operation tokens reject late results after replacement, deletion and reset', async t => {
+  for (const action of ['replace', 'delete', 'reset']) await t.test(action, async () => {
+    const old = deferred(), snapshots = []; let signal;
+    const app = boot(fixture(['en']), undefined, { sessionValues: new Map(), fetch: async (_, options) => { snapshots.push(JSON.parse(options.body)); if (snapshots.length === 1) { signal = options.signal; return old.promise; } return new Response(JSON.stringify({ provider: 'Azure', status: 'invalid', method: 'translation', billableCharacters: 1 })); } }); t.after(() => app.close());
+    await app.click('nav', { view: 'settings' }); app.field('provider-Azure-key', 'fixture-old-key'); app.field('provider-Azure-region', 'eastasia');
+    const first = app.click('save-provider-credentials', { provider: 'Azure' });
+    if (action === 'replace') { app.field('provider-Azure-key', 'fixture-new-key'); await app.click('save-provider-credentials', { provider: 'Azure' }); }
+    else await app.click(action === 'delete' ? 'delete-provider-credentials' : 'reset', { provider: 'Azure' });
+    assert.equal(signal.aborted, true);
+    old.resolve(new Response(JSON.stringify({ provider: 'Azure', status: 'valid', method: 'translation', billableCharacters: 1, message: 'fixture-old-key' }))); await first;
+    assert.equal(snapshots[0].credentials.apiKey, 'fixture-old-key');
+    if (action === 'replace') { assert.equal(snapshots[1].credentials.apiKey, 'fixture-new-key'); assert.match(app.content('provider-Azure-feedback'), /data-validation-status="invalid"/); }
+    else { assert.doesNotMatch(app.html(), /上次单字试译通过/); assert.equal(app.sessionValues.get('langpack-provider-session-v1'), undefined); }
+    assert.doesNotMatch(JSON.stringify(app.state()), /fixture-old-key|fixture-new-key/);
+  });
+});
+
+test('independent platform validations can finish in reverse order and feedback survives navigation for the current page session', async t => {
+  const azure = deferred(), google = deferred();
+  const app = boot(fixture(['en']), undefined, { sessionValues: new Map(), fetch: async (_, options) => JSON.parse(options.body).provider === 'Azure' ? azure.promise : google.promise }); t.after(() => app.close());
+  await app.click('nav', { view: 'settings' }); app.field('provider-Azure-key', 'fixture-azure-key'); app.field('provider-Azure-region', 'eastasia'); const savingAzure = app.click('save-provider-credentials', { provider: 'Azure' });
+  app.field('provider-Google-key', 'fixture-google-key'); const savingGoogle = app.click('save-provider-credentials', { provider: 'Google' });
+  google.resolve(new Response(JSON.stringify({ provider: 'Google', status: 'valid', method: 'metadata', billableCharacters: 0 }))); await savingGoogle;
+  azure.resolve(new Response(JSON.stringify({ provider: 'Azure', status: 'valid', method: 'translation', billableCharacters: 1 }))); await savingAzure;
+  assert.equal(app.disabled('provider-Azure-save'), false); assert.equal(app.disabled('provider-Google-save'), false);
+  assert.match(app.content('provider-Azure-feedback'), /上次单字试译通过/); assert.match(app.content('provider-Google-feedback'), /授权检查通过，本次未试译/);
+  await app.click('project', { id: 'a' }); await app.click('nav', { view: 'settings' });
+  assert.match(app.html(), /上次单字试译通过/); assert.match(app.html(), /授权检查通过，本次未试译/); assert.match(app.html(), /仅本次会话/);
+});
+
+test('validation timeout keeps the saved credentials and ends the checking state without retrying', async t => {
+  let calls = 0;
+  const app = boot(fixture(['en']), undefined, { validationTimeoutMs: 1, sessionValues: new Map(), fetch: async () => { calls++; return new Promise(() => {}); } }); t.after(() => app.close());
+  await app.click('nav', { view: 'settings' }); app.field('provider-Azure-key', 'fixture-timeout-key'); app.field('provider-Azure-region', 'eastasia'); await app.click('save-provider-credentials', { provider: 'Azure' });
+  assert.equal(calls, 1); assert.equal(app.disabled('provider-Azure-save'), false); assert.match(app.content('provider-Azure-feedback'), /data-validation-status="unavailable"/); assert.match(app.sessionValues.get('langpack-provider-session-v1'), /fixture-timeout-key/);
 });

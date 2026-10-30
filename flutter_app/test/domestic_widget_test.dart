@@ -1,8 +1,26 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:langpack/controller.dart';
+import 'package:langpack/models.dart';
+import 'package:langpack/services/translation_service.dart';
 import 'package:langpack/ui/app.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+class _DomesticValidationFixture extends TranslationService {
+  @override
+  Future<CredentialValidation> validateCredentials(
+    String provider,
+    Map<String, String> credentials, {
+    String apiBaseUrl = '',
+    CancelToken? token,
+  }) async => CredentialValidation(
+    provider: provider,
+    status: 'valid',
+    method: 'translation',
+    billableCharacters: 1,
+    message: 'Mock single-character probe.',
+  );
+}
 
 Future<void> tapVisible(WidgetTester tester, Finder finder) async {
   await tester.ensureVisible(finder.first);
@@ -24,7 +42,9 @@ void main() {
         addTearDown(tester.view.resetPhysicalSize);
         addTearDown(tester.view.resetDevicePixelRatio);
         SharedPreferences.setMockInitialValues({});
-        final controller = AppController();
+        final controller = AppController(
+          translator: _DomesticValidationFixture(),
+        );
         await controller.initialize();
         addTearDown(controller.dispose);
         await tester.pumpWidget(LangPackApp(controller: controller));

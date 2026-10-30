@@ -9,6 +9,8 @@
   const credentialVault = P.createVault({ sessionStorage: storageFor('sessionStorage'), localStorage: storageFor('localStorage') });
   let providerRevision = 0;
   const providerCircuits = {};
+  const providerValidation = new Map();
+  const providerValidationVersions = new Map();
   const $ = (selector, root = document) => root.querySelector(selector);
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const uid = () => crypto.randomUUID ? crypto.randomUUID() : 'id_' + Date.now().toString(36) + Math.random().toString(36).slice(2);
@@ -407,9 +409,64 @@
   }
   function renderSettings() {
     return pageHead(titleFor.settings, '', '', 'WORKSPACE PREFERENCES') + window.LangPackProviderSettings.render({ settings: state.settings, names: P.names, status(provider) {
-      const value = credentialVault.get(provider);
-      return { ready: credentialVault.has(provider), remembered: credentialVault.remembered(provider), developer: !!value.developerToken, tenantId: value.tenantId, region: value.region, plan: value.plan };
+      return providerPresentation(provider);
     } });
+  }
+  function providerPresentation(provider) {
+    const value = credentialVault.get(provider), feedback = providerValidation.get(provider);
+    return { ready: credentialVault.has(provider), remembered: credentialVault.remembered(provider), developer: !!value.developerToken, tenantId: value.tenantId, region: value.region, plan: value.plan, checking: !!feedback?.checking, validationStatus: feedback?.status || 'unverified', method: feedback?.method, billableCharacters: feedback?.billableCharacters, storage: feedback?.storage, checkedAt: feedback?.checkedAt };
+  }
+  function updateProviderFeedback(provider) {
+    if (state.view !== 'settings') return;
+    const value = providerPresentation(provider), ui = window.LangPackProviderSettings;
+    const area = $(`#provider-${provider}-feedback`), badge = $(`#provider-${provider}-badge`), save = $(`#provider-${provider}-save`), retry = $(`#provider-${provider}-validate`);
+    if (area) area.innerHTML = ui.feedback(provider, value);
+    if (badge) { badge.textContent = ui.badge(provider, value); badge.className = 'badge ' + (value.validationStatus === 'valid' ? 'ok' : 'neutral'); }
+    if (save) { save.disabled = value.checking; save.textContent = value.checking ? '正在验证…' : '保存并校验'; }
+    if (retry) retry.disabled = value.checking || !value.ready && provider !== 'MyMemory';
+  }
+  function invalidateProviderValidation(provider) {
+    providerValidation.get(provider)?.controller?.abort();
+    providerValidationVersions.set(provider, (providerValidationVersions.get(provider) || 0) + 1);
+    providerValidation.delete(provider);
+  }
+  function validationCredentials(provider, value) {
+    return P.cleanCredentials(provider, { ...value, ...(provider === 'MyMemory' && state.settings.translationEmail ? { email: state.settings.translationEmail } : {}) });
+  }
+  function validationRace(promise, signal) {
+    return new Promise((resolve, reject) => {
+      const abort = () => { signal.removeEventListener('abort', abort); reject(new Error('Validation aborted')); };
+      if (signal.aborted) return abort();
+      signal.addEventListener('abort', abort, { once: true });
+      Promise.resolve(promise).then(value => { signal.removeEventListener('abort', abort); resolve(value); }, () => { signal.removeEventListener('abort', abort); reject(new Error('Validation unavailable')); });
+    });
+  }
+  async function validateProviderSnapshot(provider, credentials) {
+    const existing = providerValidation.get(provider);
+    if (existing?.checking) return;
+    const controller = new AbortController(), version = providerValidationVersions.get(provider) || 0;
+    const record = { storage: existing?.storage, status: 'unverified', checking: true, controller, version };
+    providerValidation.set(provider, record); updateProviderFeedback(provider);
+    const current = () => providerValidation.get(provider) === record && (providerValidationVersions.get(provider) || 0) === version;
+    const timer = setTimeout(() => controller.abort(), 30000);
+    try {
+      const response = await validationRace(fetch('/api/translation/validate', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store', referrerPolicy: 'no-referrer', body: JSON.stringify({ provider, credentials }), signal: controller.signal }), controller.signal);
+      if (!current()) return;
+      if (!response.ok || response.status !== 200) {
+        record.status = [400, 401, 403, 422].includes(response.status) ? 'invalid' : [402, 429].includes(response.status) ? 'limited' : 'unavailable';
+        return;
+      }
+      const body = await validationRace(response.json(), controller.signal);
+      if (!current()) return;
+      const expectedMethod = provider === 'MyMemory' && !credentials.apiKey ? 'anonymous' : ['DeepL', 'Google'].includes(provider) ? 'metadata' : 'translation';
+      const validShape = body?.provider === provider && ['valid', 'invalid', 'limited', 'unavailable'].includes(body.status) && body.method === expectedMethod && body.billableCharacters === (expectedMethod === 'translation' ? 1 : 0);
+      if (!validShape) { record.status = 'unavailable'; }
+      else { record.status = body.status; record.method = body.method; record.billableCharacters = body.billableCharacters; }
+    } catch (_) { if (current()) record.status = 'unavailable'; }
+    finally {
+      clearTimeout(timer);
+      if (current()) { record.checking = false; record.checkedAt = new Date().toISOString(); delete record.controller; updateProviderFeedback(provider); }
+    }
   }
   function refreshProviderConfiguration(provider) {
     if (state.session?.status === 'running') pauseTranslation(false);
@@ -630,28 +687,51 @@
         if (provider === 'Alibaba') credentials = { accessKeyId: entered('accessKeyId', old.accessKeyId), accessKeySecret: entered('accessKeySecret', old.accessKeySecret) };
         if (!P.configured(provider, credentials)) { toast('请填写所选授权方式的凭据。'); break; }
         const remember = !!$(`#provider-${provider}-remember`).checked;
+        const snapshot = validationCredentials(provider, credentials);
+        const sameCredentials = JSON.stringify(snapshot) === JSON.stringify(validationCredentials(provider, old));
+        const previous = providerValidation.get(provider);
+        if (sameCredentials && previous?.checking && remember === credentialVault.remembered(provider)) break;
+        if (!sameCredentials) invalidateProviderValidation(provider);
         const saved = credentialVault.set(provider, credentials, remember);
-        refreshProviderConfiguration(provider); toast(saved ? remember ? '凭据已保存到本机浏览器。' : '凭据仅在当前标签页会话中可用。' : '当前页可用，但浏览器未完成保存或清除旧副本；请在浏览器中清理旧平台凭据。'); break;
+        const record = sameCredentials && previous ? previous : { status: 'unverified', checking: false };
+        record.storage = saved ? remember ? 'local' : 'session' : 'partial';
+        providerValidation.set(provider, record);
+        refreshProviderConfiguration(provider);
+        if (sameCredentials && previous && (previous.checking || previous.status !== 'unverified')) { updateProviderFeedback(provider); toast(previous.checking ? '保存方式已更新，正在继续本次校验。' : '保存方式已更新，沿用当前会话上次校验的记录。'); break; }
+        toast(saved ? '凭据已保存，正在校验；校验结果会单独显示。' : '当前页已保留凭据，但浏览器保存或旧副本清除未完成；校验结果会单独显示。');
+        await validateProviderSnapshot(provider, snapshot); break;
+      }
+      case 'validate-provider': {
+        const provider = button.dataset.provider;
+        if (!P.known(provider) || providerValidation.get(provider)?.checking) break;
+        const snapshot = validationCredentials(provider, credentialVault.get(provider));
+        if (provider !== 'MyMemory' && !credentialVault.has(provider)) { toast('请先保存这个平台的凭据。'); break; }
+        await validateProviderSnapshot(provider, snapshot); break;
       }
       case 'delete-provider-credentials': {
         const provider = button.dataset.provider;
         if (!P.known(provider)) break;
-        const removed = credentialVault.remove(provider); refreshProviderConfiguration(provider); toast(removed ? '这个平台的本机凭据已删除。' : '当前页凭据已删除，但浏览器阻止了旧副本清除；请清理站点数据。'); break;
+        invalidateProviderValidation(provider);
+        const removed = credentialVault.remove(provider);
+        providerValidation.set(provider, { status: 'unverified', checking: false, storage: removed ? 'deleted' : 'delete-partial' });
+        refreshProviderConfiguration(provider); toast(removed ? '这个平台的本机凭据已删除，校验结果已清除。' : '当前页凭据已删除，但浏览器阻止了旧副本清除；请清理站点数据。'); break;
       }
       case 'verify-developer': {
         const token = $('#provider-ZTAITrans-developer').value.trim() || credentialVault.get('ZTAITrans').developerToken;
         if (!token) { toast('请先填写开发者口令。'); break; }
-        try { const response = await fetch('/api/translation/status', { headers: { 'X-LangPack-Developer-Token': token }, credentials: 'same-origin', cache: 'no-store', referrerPolicy: 'no-referrer' }); const body = await response.json(); toast(response.ok && body.backupConfigured === true ? '开发者口令验证通过，保存后可使用。' : '开发者口令未通过验证，请检查输入。'); } catch (_) { toast('无法验证开发者口令，请检查网络。'); }
+        const version = providerValidationVersions.get('ZTAITrans') || 0;
+        const current = () => (providerValidationVersions.get('ZTAITrans') || 0) === version && state.view === 'settings' && ($('#provider-ZTAITrans-developer')?.value.trim() || credentialVault.get('ZTAITrans').developerToken) === token;
+        try { const response = await fetch('/api/translation/status', { headers: { 'X-LangPack-Developer-Token': token }, credentials: 'same-origin', cache: 'no-store', referrerPolicy: 'no-referrer' }); const body = await response.json(); if (current()) toast(response.ok && body.backupConfigured === true ? '开发者身份验证通过；上游翻译凭据仍需保存后校验。' : '开发者口令未通过验证，请检查输入。'); } catch (_) { if (current()) toast('无法验证开发者口令，请检查网络。'); }
         break;
       }
       case 'save-translation-settings': {
         const field = $('#translation-email'), email = field.value.trim();
         if (email && (!field.validity.valid || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) { $('#settings-error').textContent = '请输入可接收联系的有效邮箱，或清空后使用匿名额度。'; break; }
-        if (email !== state.settings.translationEmail) { cancelSingle(); if (state.session?.status === 'running') pauseTranslation(false); providerRevision++; providerCircuits.MyMemory = state.settings.primaryCircuit = { until: 0 }; translationClients.clear(); }
+        if (email !== state.settings.translationEmail) { invalidateProviderValidation('MyMemory'); cancelSingle(); if (state.session?.status === 'running') pauseTranslation(false); providerRevision++; providerCircuits.MyMemory = state.settings.primaryCircuit = { until: 0 }; translationClients.clear(); }
         state.settings.translationEmail = email; persist(); render(); toast(email ? '已保存，后续翻译将使用该联系邮箱。' : '已切换为匿名翻译。'); break;
       }
       case 'reset-confirm': modal('恢复初始示例？', '<p>本原型内的自定义项目、译文、任务和导出记录将被清除。建议先导出需要保留的语言包。</p>', '<button class="btn" data-action="close-modal">取消</button><button class="btn primary" data-action="reset">确认重置</button>'); break;
-      case 'reset': { const cleared = credentialVault.clear(); P.names.forEach(provider => { delete providerCircuits[provider]; }); providerRevision++; batchGeneration++; batchController?.abort(); batchController = null; cancelSingle(); translationClients.clear(); state = initialState(); persist(); $('#modal').close(); render(); toast(cleared ? '已恢复初始示例。' : '项目已重置，但部分浏览器凭据副本未能删除；请清理站点数据。'); break; }
+      case 'reset': { P.names.forEach(invalidateProviderValidation); providerValidation.clear(); const cleared = credentialVault.clear(); P.names.forEach(provider => { delete providerCircuits[provider]; }); providerRevision++; batchGeneration++; batchController?.abort(); batchController = null; cancelSingle(); translationClients.clear(); state = initialState(); persist(); $('#modal').close(); render(); toast(cleared ? '已恢复初始示例。' : '项目已重置，但部分浏览器凭据副本未能删除；请清理站点数据。'); break; }
       case 'flow-back': {
         if (state.view === 'input' || state.view === 'import') nav('project');
         else if (state.view === 'languages') nav(s.mode === 'project' ? 'project' : s.mode === 'document' ? 'import' : 'input');

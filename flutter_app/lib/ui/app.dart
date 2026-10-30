@@ -12,6 +12,7 @@ import '../services/translation_service.dart' show defaultBackupServiceOrigin;
 import 'ios_modals.dart';
 import 'privacy_policy.dart';
 import 'settings_detail_page.dart';
+import 'onboarding.dart';
 
 const _green = Color(0xFF197E64);
 const _ink = Color(0xFF243E34);
@@ -21,8 +22,9 @@ const _canvas = Color(0xFFF5F8F4);
 
 /// One adaptive workspace for mobile, desktop, and the browser.
 class LangPackApp extends StatelessWidget {
-  const LangPackApp({super.key, required this.controller});
+  const LangPackApp({super.key, required this.controller, this.startup});
   final AppController controller;
+  final Widget? startup;
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -98,7 +100,7 @@ class LangPackApp extends StatelessWidget {
         labelTextStyle: WidgetStateProperty.all(const TextStyle(fontSize: 11)),
       ),
     ),
-    home: _Workspace(controller: controller),
+    home: startup ?? _Workspace(controller: controller),
   );
 }
 
@@ -5741,6 +5743,28 @@ class _WorkspaceState extends State<_Workspace> {
             _Panel(
               padding: EdgeInsets.zero,
               child: ListTile(
+                key: const ValueKey('settings-introduction'),
+                leading: const Icon(CupertinoIcons.book, color: _green),
+                title: Text(_t('使用引导', 'Getting started')),
+                subtitle: Text(
+                  _t('从文案到语言包，三步了解译包', 'From source text to language packs'),
+                ),
+                trailing: const Icon(CupertinoIcons.chevron_forward, size: 16),
+                onTap: () => Navigator.of(context).push<void>(
+                  MaterialPageRoute(
+                    builder: (pageContext) => LangPackOnboarding(
+                      english: _en,
+                      onComplete: () => Navigator.of(pageContext).pop(),
+                    ),
+                    fullscreenDialog: true,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+            _Panel(
+              padding: EdgeInsets.zero,
+              child: ListTile(
                 key: const ValueKey('settings-privacy-policy'),
                 leading: const Icon(CupertinoIcons.shield, color: _green),
                 title: Text(_t('隐私协议', 'Privacy policy')),
@@ -5930,20 +5954,7 @@ class _Brand extends StatelessWidget {
   Widget build(BuildContext context) => Row(
     mainAxisSize: MainAxisSize.min,
     children: [
-      Container(
-        width: 36,
-        height: 36,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: _green,
-          borderRadius: BorderRadius.circular(11),
-        ),
-        child: const Icon(
-          Icons.translate_rounded,
-          size: 21,
-          color: Colors.white,
-        ),
-      ),
+      const BrandIcon(size: 36),
       if (!compact) ...[
         const SizedBox(width: 12),
         const Expanded(

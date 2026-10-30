@@ -1,12 +1,11 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'controller.dart';
-import 'ui/app.dart';
+import 'ui/startup.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final controller = AppController();
-  await controller.initialize();
   runApp(_LifecycleHost(controller: controller));
 }
 
@@ -46,5 +45,5 @@ class _LifecycleHostState extends State<_LifecycleHost>
 
   @override
   Widget build(BuildContext context) =>
-      LangPackApp(controller: widget.controller);
+      LangPackStartup(controller: widget.controller);
 }

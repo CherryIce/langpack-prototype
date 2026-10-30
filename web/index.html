@@ -3,11 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#167b62">
+  <meta name="theme-color" content="#F5F8F4">
   <meta name="description" content="译包 LangPack：从中文文案到多语言 JSON，体验输入、导入、翻译、校对与导出的完整流程。">
   <title>译包 LangPack · 多语言工作台</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='13' fill='%23167b62'/%3E%3Ctext x='24' y='32' text-anchor='middle' fill='white' font-family='sans-serif' font-size='28'%3E译%3C/text%3E%3C/svg%3E">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg%20aria-hidden%3D%22true%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%221024%22%20height%3D%221024%22%20viewBox%3D%220%200%201024%201024%22%3E%0A%20%20%0A%20%20%3Crect%20width%3D%221024%22%20height%3D%221024%22%20fill%3D%22%23197E64%22%2F%3E%0A%20%20%3Cg%20id%3D%22language-cards%22%3E%0A%20%20%20%20%3Cg%20transform%3D%22rotate%28-11%20412%20465%29%22%3E%0A%20%20%20%20%20%20%3Crect%20x%3D%22236%22%20y%3D%22225%22%20width%3D%22362%22%20height%3D%22468%22%20rx%3D%2270%22%20fill%3D%22%23CDE9D9%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M303%20342H520M409%20302V342M351%20359C369%20414%20420%20452%20493%20477M480%20359C461%20414%20410%20458%20331%20490%22%20fill%3D%22none%22%20stroke%3D%22%23197E64%22%20stroke-width%3D%2228%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M311%20563H403%22%20stroke%3D%22%23197E64%22%20stroke-width%3D%2220%22%20stroke-linecap%3D%22round%22%20opacity%3D%22.3%22%2F%3E%0A%20%20%20%20%3C%2Fg%3E%0A%20%20%20%20%3Cg%20transform%3D%22rotate%2811%20621%20596%29%22%3E%0A%20%20%20%20%20%20%3Crect%20x%3D%22440%22%20y%3D%22356%22%20width%3D%22354%22%20height%3D%22435%22%20rx%3D%2270%22%20fill%3D%22%23F5F8F4%22%20stroke%3D%22%23197E64%22%20stroke-opacity%3D%22.13%22%20stroke-width%3D%223%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M526%20663L608%20469C611%20461%20622%20461%20625%20469L708%20663M553%20603H681%22%20fill%3D%22none%22%20stroke%3D%22%23197E64%22%20stroke-width%3D%2230%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M535%20718H694%22%20stroke%3D%22%23197E64%22%20stroke-width%3D%2218%22%20stroke-linecap%3D%22round%22%20opacity%3D%22.2%22%2F%3E%0A%20%20%20%20%3C%2Fg%3E%0A%20%20%3C%2Fg%3E%0A%3C%2Fsvg%3E">
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="onboarding.css">
+  <script defer src="onboarding.js"></script>
   <script defer src="languages.js"></script>
   <script defer src="providers.js"></script>
   <script defer src="provider-settings.js"></script>
@@ -19,6 +21,25 @@
 </head>
 <body>
   <div id="app"></div>
+  <div id="langpack-boot" class="langpack-boot" role="status" aria-label="正在打开 LangPack">
+    <div class="langpack-boot-emblem" aria-hidden="true"><svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+
+  <rect width="1024" height="1024" fill="#197E64"/>
+  <g id="language-cards">
+    <g transform="rotate(-11 412 465)">
+      <rect x="236" y="225" width="362" height="468" rx="70" fill="#CDE9D9"/>
+      <path d="M303 342H520M409 302V342M351 359C369 414 420 452 493 477M480 359C461 414 410 458 331 490" fill="none" stroke="#197E64" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M311 563H403" stroke="#197E64" stroke-width="20" stroke-linecap="round" opacity=".3"/>
+    </g>
+    <g transform="rotate(11 621 596)">
+      <rect x="440" y="356" width="354" height="435" rx="70" fill="#F5F8F4" stroke="#197E64" stroke-opacity=".13" stroke-width="3"/>
+      <path d="M526 663L608 469C611 461 622 461 625 469L708 663M553 603H681" fill="none" stroke="#197E64" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M535 718H694" stroke="#197E64" stroke-width="18" stroke-linecap="round" opacity=".2"/>
+    </g>
+  </g>
+</svg></div>
+    <strong>LangPack</strong><span>让语言，轻松相通</span>
+  </div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <dialog id="modal"></dialog>
   <noscript>请启用 JavaScript，以体验多语言翻译与导出流程。</noscript>

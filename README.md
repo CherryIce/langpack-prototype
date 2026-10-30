@@ -1,5 +1,13 @@
 # 译包 LangPack · 多平台真实翻译
 
+## 品牌与首次使用体验
+
+[设计总览](design/brand/index.html)包含双语叠卡 App 图标、启动页与三步引导；[总览图片](design/brand/overview.png)、SVG 母版与 1024 PNG 位于 `design/brand/`。iOS、Android、macOS、Windows 和 Web 图标已接入，iOS / Android 启动资源随工程保存。
+
+首次安装显示「收集文案 → 多语言翻译 → 校对导出」，支持中英文、跳过与返回；完成后不再自动展示。已有项目存档用户直接进入工作台，可从设置的「使用引导」再次查看。引导标记独立保存，不改写项目或凭据。加载页随本地初始化结束自然退出，没有人为停留时间。
+
+本次通过 Flutter 静态检查、198 项现有测试（3 项跳过）、7 项本地引导回归与 331 项 Web 测试，并完成 Flutter Web release 构建和手机/桌面浏览器截图检查。原生图标与启动配置已静态核对，iOS / Android 真机启动仍需单独验收。
+
 **[在线体验：译包 LangPack · 多语言工作台](https://langpack-standalone.406859116.workers.dev/)**（Cloudflare Workers 独立部署）
 
 完整体验：项目首页 → 文本输入 / 文档导入 → 多选语言 → 选择的平台翻译 → 校对 → JSON / ZIP 下载。

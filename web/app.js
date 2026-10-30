@@ -183,7 +183,7 @@
   function shell(content) {
     const project = currentProject();
     const inFlow = ['project', 'input', 'import', 'languages', 'translate', 'review', 'export'].includes(state.view);
-    return `<aside class="sidebar"><button class="brand" data-action="nav" data-view="home" aria-label="译包，返回项目首页"><div class="brand-logo"><span>译</span><sup>A</sup></div><div><div class="brand-title">${uiEnglish() ? 'LangPack' : '译包'}${uiEnglish() ? '' : '<span style="font-size:13px;font-weight:400;margin-left:6px;color:#839d8b">LangPack</span>'}</div><div class="brand-sub">让语言，轻松相通</div></div></button><div class="workspace-label">WORKSPACE</div><nav class="main-nav" aria-label="主导航">${navLink('home', '我的项目', 'grid')}${navLink('tasks', '翻译任务', 'tasks')}${navLink('exports', '导出记录', 'download')}${navLink('settings', '偏好设置', 'settings')}</nav><div class="sidebar-bottom"><div class="tip-box">${icon('sparkles')}<h3>从一句中文开始</h3><p>语义 key、多语言翻译、JSON 导出，一次完成。</p><button class="text-button" data-action="help">了解工作流程 ${icon('right')}</button></div><button class="user-button" data-action="nav" data-view="settings"><div class="avatar">L</div><div class="user-info"><strong>我的工作空间</strong><span>保存在当前浏览器</span></div>${icon('down')}</button></div></aside><div class="app-shell"><header class="topbar"><div class="breadcrumb">${icon('folder')}<button data-action="nav" data-view="home">工作空间</button>${icon('chevron')}${inFlow ? `<button data-action="project" data-id="${esc(project?.id || '')}">${esc(project?.name || '项目')}</button>${icon('chevron')}` : ''}<span>${titleFor[state.view]}</span></div><div class="top-actions"><span class="demo-indicator"><i></i>多平台真实翻译</span><button class="icon-button" data-action="help" aria-label="使用帮助">${icon('help')}</button><button class="top-avatar" data-action="nav" data-view="settings" aria-label="工作空间设置">L</button></div></header><main class="main" id="main-content">${content}</main></div><nav class="mobile-bottom" aria-label="底部导航">${navLink('home', '项目', 'grid', true)}${navLink('tasks', '任务', 'tasks', true)}${navLink('exports', '导出', 'download', true)}${navLink('settings', '设置', 'settings', true)}</nav>`;
+    return `<aside class="sidebar"><button class="brand" data-action="nav" data-view="home" aria-label="译包，返回项目首页"><div class="brand-logo brand-symbol">${window.LangPackOnboarding?.logo || '<span>译</span>'}</div><div><div class="brand-title">${uiEnglish() ? 'LangPack' : '译包'}${uiEnglish() ? '' : '<span style="font-size:13px;font-weight:400;margin-left:6px;color:#839d8b">LangPack</span>'}</div><div class="brand-sub">让语言，轻松相通</div></div></button><div class="workspace-label">WORKSPACE</div><nav class="main-nav" aria-label="主导航">${navLink('home', '我的项目', 'grid')}${navLink('tasks', '翻译任务', 'tasks')}${navLink('exports', '导出记录', 'download')}${navLink('settings', '偏好设置', 'settings')}</nav><div class="sidebar-bottom"><div class="tip-box">${icon('sparkles')}<h3>从一句中文开始</h3><p>语义 key、多语言翻译、JSON 导出，一次完成。</p><button class="text-button" data-action="help">了解工作流程 ${icon('right')}</button></div><button class="user-button" data-action="nav" data-view="settings"><div class="avatar">L</div><div class="user-info"><strong>我的工作空间</strong><span>保存在当前浏览器</span></div>${icon('down')}</button></div></aside><div class="app-shell"><header class="topbar"><div class="breadcrumb">${icon('folder')}<button data-action="nav" data-view="home">工作空间</button>${icon('chevron')}${inFlow ? `<button data-action="project" data-id="${esc(project?.id || '')}">${esc(project?.name || '项目')}</button>${icon('chevron')}` : ''}<span>${titleFor[state.view]}</span></div><div class="top-actions"><span class="demo-indicator"><i></i>多平台真实翻译</span><button class="icon-button" data-action="help" aria-label="使用帮助">${icon('help')}</button><button class="top-avatar" data-action="nav" data-view="settings" aria-label="工作空间设置">L</button></div></header><main class="main" id="main-content">${content}</main></div><nav class="mobile-bottom" aria-label="底部导航">${navLink('home', '项目', 'grid', true)}${navLink('tasks', '任务', 'tasks', true)}${navLink('exports', '导出', 'download', true)}${navLink('settings', '设置', 'settings', true)}</nav>`;
   }
   function pageHead(title, subtitle, action = '', eyebrow = '') { return `<div class="page-head between"><div>${eyebrow ? `<div class="eyebrow">${eyebrow}</div>` : ''}<h1>${title}</h1><p>${subtitle}</p></div>${action}</div>`; }
   function renderHome() {
@@ -445,7 +445,7 @@
   function renderSettings() {
     return pageHead(titleFor.settings, '', '', 'WORKSPACE PREFERENCES') + window.LangPackProviderSettings.render({ settings: state.settings, names: P.names, status(provider) {
       return providerPresentation(provider);
-    } });
+    } }) + `<section class="panel onboarding-settings"><div><h3>${uiEnglish() ? 'A little guide to LangPack' : '初次见面，认识译包'}</h3><p>${uiEnglish() ? 'Import, translate, review, and export in three simple steps.' : '用三步，了解从原文到语言包的完整流程。'}</p></div><button class="btn" data-action="view-onboarding">${uiEnglish() ? 'View guide' : '查看使用引导'}${icon('right')}</button></section>`;
   }
   function providerPresentation(provider) {
     const value = credentialVault.get(provider), feedback = providerValidation.get(provider);
@@ -746,6 +746,7 @@
       case 'nav': nav(button.dataset.view); break;
       case 'toggle-ui-locale': state.settings.uiLocale = uiEnglish() ? 'zh' : 'en'; persist(); render(); break;
       case 'help': helpModal(); break;
+      case 'view-onboarding': window.LangPackOnboarding?.show({ english: uiEnglish() }); break;
       case 'close-modal': $('#modal').close(); break;
       case 'new-project': newProjectModal(); break;
       case 'create-project': {
@@ -1001,4 +1002,9 @@
   $('#modal').addEventListener('click', event => { if (event.target === $('#modal')) { const rect = $('#modal').getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) $('#modal').close(); } });
   window.addEventListener('beforeunload', persist);
   persist(); render();
+  $('#langpack-boot')?.remove();
+  window.LangPackOnboarding?.initialize({
+    english: uiEnglish(),
+    onLanguageChange(english) { state.settings.uiLocale = english ? 'en' : 'zh'; persist(); render(); }
+  });
 })();

@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>LangPack — language cards</title>
+  <g id="language-cards">
+    <g transform="rotate(-11 412 465)">
+      <rect x="236" y="225" width="362" height="468" rx="70" fill="#CDE9D9"/>
+      <path d="M303 342H520M409 302V342M351 359C369 414 420 452 493 477M480 359C461 414 410 458 331 490" fill="none" stroke="#197E64" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M311 563H403" stroke="#197E64" stroke-width="20" stroke-linecap="round" opacity=".3"/>
+    </g>
+    <g transform="rotate(11 621 596)">
+      <rect x="440" y="356" width="354" height="435" rx="70" fill="#F5F8F4" stroke="#197E64" stroke-opacity=".13" stroke-width="3"/>
+      <path d="M526 663L608 469C611 461 622 461 625 469L708 663M553 603H681" fill="none" stroke="#197E64" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M535 718H694" stroke="#197E64" stroke-width="18" stroke-linecap="round" opacity=".2"/>
+    </g>
+  </g>
+</svg>

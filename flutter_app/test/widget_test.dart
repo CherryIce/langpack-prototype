@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -10,6 +11,7 @@ import 'package:langpack/models.dart';
 import 'package:langpack/services/export_service.dart';
 import 'package:langpack/services/translation_service.dart';
 import 'package:langpack/ui/app.dart';
+import 'package:langpack/ui/ios_modals.dart';
 
 class _FixtureTranslation extends TranslationService {
   @override
@@ -119,21 +121,25 @@ void main() {
       expect(controller.settings.interfaceLocale, 'en');
       expect(find.text('My projects'), findsWidgets);
       await _tap(tester, find.text('New project'));
-      final sourceChoice = tester.widget<SegmentedButton<String>>(
-        find.byKey(const ValueKey('new-project-source-locale')),
-      );
-      expect(sourceChoice.selected, {'en'});
+      final sourceChoice = tester
+          .widget<CupertinoSlidingSegmentedControl<String>>(
+            find.byKey(const ValueKey('new-project-source-locale')),
+          );
+      expect(sourceChoice.groupValue, 'en');
       await tester.enterText(
         find.byType(TextFormField).first,
         'English strings',
       );
-      await _tap(tester, find.widgetWithText(FilledButton, 'Create project'));
+      await _tap(
+        tester,
+        find.widgetWithText(CupertinoButton, 'Create project'),
+      );
       expect(controller.currentProject!.sourceLocale, 'en');
-      expect(find.text('Source: English (en)'), findsOneWidget);
+      expect(find.bySemanticsLabel('Source: English (en)'), findsOneWidget);
       await _tap(tester, find.text('中文').first);
       expect(controller.settings.interfaceLocale, 'zh');
       expect(controller.currentProject!.sourceLocale, 'en');
-      expect(find.text('源语言：英文（en）'), findsOneWidget);
+      expect(find.bySemanticsLabel('源语言：英文（en）'), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
     },
@@ -168,16 +174,20 @@ void main() {
       await tester.pumpWidget(LangPackApp(controller: controller));
       await tester.pumpAndSettle();
       await _tap(tester, find.text('设置'));
+      await _tap(tester, find.byKey(const ValueKey('provider-details-DeepL')));
       await _tap(tester, find.text('配置 DeepL'));
       final field = find.byWidgetPredicate(
         (widget) =>
             widget is TextField && widget.decoration?.labelText == 'API 密钥',
       );
       expect(tester.widget<TextField>(field).obscureText, isTrue);
-      final remember = find.widgetWithText(CheckboxListTile, '在本机保存凭据');
-      expect(tester.widget<CheckboxListTile>(remember).value, isFalse);
+      final remember = find.descendant(
+        of: find.byType(IosFormSheet),
+        matching: find.byType(CupertinoSwitch),
+      );
+      expect(tester.widget<CupertinoSwitch>(remember).value, isFalse);
       await tester.enterText(field, 'widget_session_fixture');
-      await _tap(tester, find.widgetWithText(FilledButton, '保存配置'));
+      await _tap(tester, find.widgetWithText(CupertinoButton, '保存'));
       expect(
         controller.credentialsFor('DeepL')['apiKey'],
         'widget_session_fixture',
@@ -196,6 +206,8 @@ void main() {
         ),
         isNull,
       );
+      await tester.pageBack();
+      await tester.pumpAndSettle();
       await _tap(tester, find.byKey(const ValueKey('provider-enable-DeepL')));
       expect(controller.settings.providerOrder, ['MyMemory', 'DeepL']);
       await controller.flush();
@@ -352,13 +364,14 @@ void main() {
       await tester.pumpWidget(LangPackApp(controller: controller));
       await tester.pumpAndSettle();
       expect(find.byType(NavigationBar), findsOneWidget);
-      expect(find.text('你的第一个多语言项目'), findsOneWidget);
+      expect(find.text('还没有项目'), findsOneWidget);
       expect(controller.projects, isEmpty);
       await _tap(tester, find.text('新建项目'));
       await tester.enterText(find.byType(TextFormField).first, '移动端文案');
-      await _tap(tester, find.widgetWithText(FilledButton, '创建项目'));
+      await _tap(tester, find.widgetWithText(CupertinoButton, '创建项目'));
       expect(controller.currentProject?.name, '移动端文案');
       expect(controller.currentProject?.entries, isEmpty);
+      await controller.flush();
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
     },
@@ -541,20 +554,20 @@ void main() {
       expect(tester.view.viewInsets.bottom, 320);
       expect(
         MediaQuery.viewInsetsOf(
-          tester.element(find.byType(AlertDialog)),
+          tester.element(find.byType(IosFormSheet)),
         ).bottom,
         320,
       );
       await tester.enterText(find.byType(TextFormField).first, '键盘项目');
       final description = find
           .descendant(
-            of: find.byType(AlertDialog),
+            of: find.byType(IosFormSheet),
             matching: find.byType(TextField),
           )
           .last;
       await tester.ensureVisible(description);
       await tester.enterText(description, '用小屏幕完成项目创建，说明输入框和创建按钮都应可用。');
-      await _tap(tester, find.widgetWithText(FilledButton, '创建项目'));
+      await _tap(tester, find.widgetWithText(CupertinoButton, '创建项目'));
       expect(controller.currentProject!.name, '键盘项目');
       controller.addBlocks([DocumentBlock('需要校对的中文原文。')]);
       await tester.pumpAndSettle();
@@ -563,17 +576,17 @@ void main() {
       expect(find.text('编辑中文原文'), findsOneWidget);
       expect(
         MediaQuery.viewInsetsOf(
-          tester.element(find.byType(AlertDialog)),
+          tester.element(find.byType(IosFormSheet)),
         ).bottom,
         320,
       );
       final sourceField = find.descendant(
-        of: find.byType(AlertDialog),
+        of: find.byType(IosFormSheet),
         matching: find.byType(TextField),
       );
       await tester.ensureVisible(sourceField);
       await tester.enterText(sourceField, '已经在键盘上方完成编辑的新原文。');
-      await _tap(tester, find.widgetWithText(FilledButton, '保存'));
+      await _tap(tester, find.widgetWithText(CupertinoButton, '保存'));
       await tester.pump(const Duration(milliseconds: 400));
       expect(
         controller.currentProject!.entries.single.source,

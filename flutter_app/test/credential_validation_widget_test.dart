@@ -1,11 +1,13 @@
 import 'dart:async';
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:langpack/controller.dart';
 import 'package:langpack/models.dart';
 import 'package:langpack/services/translation_service.dart';
 import 'package:langpack/ui/app.dart';
+import 'package:langpack/ui/ios_modals.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class _WidgetValidator extends TranslationService {
@@ -55,6 +57,10 @@ void main() {
       await tester.pumpWidget(LangPackApp(controller: controller));
       await tester.pumpAndSettle();
       await tapVisible(tester, find.text('设置'));
+      await tapVisible(
+        tester,
+        find.byKey(const ValueKey('provider-details-Azure')),
+      );
       await tapVisible(tester, find.text('配置 Azure'));
       expect(find.textContaining('保存后自动验证'), findsOneWidget);
       expect(find.textContaining('可能产生 1 字符'), findsOneWidget);
@@ -62,8 +68,8 @@ void main() {
         find.byKey(const ValueKey('credential-Azure-apiKey')),
         'widget_validation_fixture',
       );
-      await tapVisible(tester, find.widgetWithText(FilledButton, '保存配置'));
-      expect(find.byType(AlertDialog), findsNothing);
+      await tapVisible(tester, find.widgetWithText(CupertinoButton, '保存'));
+      expect(find.byType(IosFormSheet), findsNothing);
       expect(
         controller.credentialsFor('Azure')['apiKey'],
         'widget_validation_fixture',

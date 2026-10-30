@@ -2,12 +2,16 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../controller.dart';
 import '../models.dart';
 import '../services/translation_service.dart' show defaultBackupServiceOrigin;
+import 'ios_modals.dart';
+import 'privacy_policy.dart';
+import 'settings_detail_page.dart';
 
 const _green = Color(0xFF197E64);
 const _ink = Color(0xFF243E34);
@@ -122,6 +126,7 @@ class _Workspace extends StatefulWidget {
 
 class _WorkspaceState extends State<_Workspace> {
   AppController get c => widget.controller;
+  bool get _compact => MediaQuery.sizeOf(context).width < 650;
   static const _englishLanguageNames = <String, String>{
     'zh-Hans': 'Simplified Chinese',
     'zh-Hant': 'Traditional Chinese',
@@ -383,10 +388,10 @@ class _WorkspaceState extends State<_Workspace> {
                         : SingleChildScrollView(
                             key: ValueKey(_view),
                             padding: EdgeInsets.fromLTRB(
-                              compact ? 20 : 34,
-                              compact ? 25 : 34,
-                              compact ? 20 : 34,
-                              40,
+                              compact ? 16 : 34,
+                              compact ? 16 : 34,
+                              compact ? 16 : 34,
+                              compact ? 24 : 40,
                             ),
                             child: Center(
                               child: ConstrainedBox(
@@ -406,6 +411,7 @@ class _WorkspaceState extends State<_Workspace> {
       ),
       bottomNavigationBar: compact
           ? NavigationBar(
+              height: 64,
               selectedIndex: _navIndex,
               onDestinationSelected: _selectNavigation,
               destinations: [
@@ -577,8 +583,8 @@ class _WorkspaceState extends State<_Workspace> {
   );
 
   Widget _topbar(bool compact) => Container(
-    height: compact ? 62 : 72,
-    padding: EdgeInsets.symmetric(horizontal: compact ? 20 : 34),
+    height: compact ? 56 : 72,
+    padding: EdgeInsets.symmetric(horizontal: compact ? 16 : 34),
     decoration: const BoxDecoration(
       color: Colors.white,
       border: Border(bottom: BorderSide(color: _line)),
@@ -609,17 +615,32 @@ class _WorkspaceState extends State<_Workspace> {
           ),
         ),
         const SizedBox(width: 10),
-        SegmentedButton<String>(
-          key: const ValueKey('interface-locale-switch'),
-          showSelectedIcon: false,
-          style: const ButtonStyle(visualDensity: VisualDensity.compact),
-          segments: const [
-            ButtonSegment(value: 'zh', label: Text('中文')),
-            ButtonSegment(value: 'en', label: Text('EN')),
-          ],
-          selected: {c.settings.interfaceLocale},
-          onSelectionChanged: (values) => c.setInterfaceLocale(values.first),
-        ),
+        if (compact)
+          Tooltip(
+            message: _t('切换为英文', 'Switch to Chinese'),
+            child: OutlinedButton(
+              key: const ValueKey('interface-locale-switch'),
+              style: OutlinedButton.styleFrom(
+                minimumSize: const Size(52, 44),
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                shape: const StadiumBorder(),
+              ),
+              onPressed: () => c.setInterfaceLocale(_en ? 'zh' : 'en'),
+              child: Text(_en ? '中文' : 'EN'),
+            ),
+          )
+        else
+          SegmentedButton<String>(
+            key: const ValueKey('interface-locale-switch'),
+            showSelectedIcon: false,
+            style: const ButtonStyle(visualDensity: VisualDensity.compact),
+            segments: const [
+              ButtonSegment(value: 'zh', label: Text('中文')),
+              ButtonSegment(value: 'en', label: Text('EN')),
+            ],
+            selected: {c.settings.interfaceLocale},
+            onSelectionChanged: (values) => c.setInterfaceLocale(values.first),
+          ),
       ],
     ),
   );
@@ -709,6 +730,9 @@ class _WorkspaceState extends State<_Workspace> {
       (sum, p) => sum + p.entries.length,
     );
     final totalLanguages = c.projects.expand((p) => p.locales).toSet().length;
+    if (_compact) {
+      return _mobileHome(projects, totalEntries, totalLanguages);
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -910,6 +934,127 @@ class _WorkspaceState extends State<_Workspace> {
     );
   }
 
+  Widget _mobileHome(
+    List<Project> projects,
+    int totalEntries,
+    int totalLanguages,
+  ) => Column(
+    key: const ValueKey('mobile-home'),
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Wrap(
+        alignment: WrapAlignment.spaceBetween,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 8,
+        runSpacing: 4,
+        children: [
+          Text(
+            _t('我的项目', 'My projects'),
+            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w600),
+          ),
+          TextButton.icon(
+            onPressed: _newProject,
+            style: TextButton.styleFrom(minimumSize: const Size(0, 44)),
+            icon: const Icon(Icons.add, size: 18),
+            label: Text(_t('新建项目', 'New project')),
+          ),
+        ],
+      ),
+      const SizedBox(height: 10),
+      _Panel(
+        color: const Color(0xFFEDF5EA),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              _t('开始翻译', 'Start translating'),
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 10),
+            ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 44),
+              child: FilledButton.icon(
+                key: const ValueKey('mobile-quick-input'),
+                onPressed: () => _beginInput(false),
+                style: FilledButton.styleFrom(minimumSize: const Size(0, 44)),
+                icon: const Icon(Icons.edit_note_rounded, size: 18),
+                label: Text(_t('输入文案', 'Enter text')),
+              ),
+            ),
+            const SizedBox(height: 8),
+            ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 44),
+              child: OutlinedButton.icon(
+                key: const ValueKey('mobile-quick-import'),
+                onPressed: () => _beginInput(true),
+                style: OutlinedButton.styleFrom(minimumSize: const Size(0, 44)),
+                icon: const Icon(Icons.upload_file_outlined, size: 18),
+                label: Text(_t('导入文档', 'Import document')),
+              ),
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 16),
+      TextField(
+        key: const ValueKey('mobile-project-search'),
+        onChanged: (value) => setState(() => _search = value),
+        decoration: InputDecoration(
+          hintText: _t('搜索项目名称', 'Search projects'),
+          prefixIcon: const Icon(Icons.search, size: 20),
+          isDense: true,
+        ),
+      ),
+      const SizedBox(height: 12),
+      if (projects.isEmpty)
+        _Panel(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                _search.isEmpty
+                    ? _t('还没有项目', 'No projects yet')
+                    : _t('没有找到匹配的项目', 'No matching projects'),
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 5),
+              Text(
+                _search.isEmpty
+                    ? _t(
+                        '输入文案或导入文档即可开始。',
+                        'Enter text or import a document to begin.',
+                      )
+                    : _t('试试其他关键词。', 'Try another search.'),
+                style: const TextStyle(fontSize: 12, color: _muted),
+              ),
+            ],
+          ),
+        )
+      else
+        for (final project in projects) ...[
+          _projectCard(project),
+          const SizedBox(height: 12),
+        ],
+      const SizedBox(height: 12),
+      _stats([
+        _Stat(
+          _t('项目总数', 'Projects'),
+          '${c.projects.length}',
+          Icons.folder_outlined,
+        ),
+        _Stat(
+          _t('源文案', 'Source strings'),
+          '$totalEntries',
+          Icons.notes_rounded,
+        ),
+        _Stat(_t('覆盖语言', 'Languages'), '$totalLanguages', Icons.public_rounded),
+      ]),
+    ],
+  );
+
   Widget _hero() => LayoutBuilder(
     builder: (context, constraints) => Container(
       padding: EdgeInsets.all(constraints.maxWidth < 600 ? 25 : 36),
@@ -1105,8 +1250,12 @@ class _WorkspaceState extends State<_Workspace> {
                       : const Border(left: BorderSide(color: _line)),
                 ),
                 padding: EdgeInsets.symmetric(
-                  horizontal: constraints.maxWidth < 600 ? 15 : 25,
-                  vertical: 21,
+                  horizontal: _compact
+                      ? 10
+                      : constraints.maxWidth < 600
+                      ? 15
+                      : 25,
+                  vertical: _compact ? 12 : 21,
                 ),
                 child: stats[index],
               ),
@@ -1118,6 +1267,7 @@ class _WorkspaceState extends State<_Workspace> {
 
   Widget _projectCard(Project p) {
     final ratio = p.totalCount == 0 ? 0.0 : p.translatedCount / p.totalCount;
+    if (_compact) return _mobileProjectCard(p, ratio);
     return _Panel(
       padding: EdgeInsets.zero,
       child: InkWell(
@@ -1239,58 +1389,256 @@ class _WorkspaceState extends State<_Workspace> {
     );
   }
 
+  Widget _mobileProjectCard(Project p, double ratio) => _Panel(
+    padding: EdgeInsets.zero,
+    child: InkWell(
+      key: ValueKey('mobile-project-card-${p.id}'),
+      borderRadius: BorderRadius.circular(14),
+      onTap: () {
+        c.openProject(p.id);
+        _go(_View.project);
+      },
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    p.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: _t('项目操作', 'Project actions'),
+                  icon: const Icon(CupertinoIcons.ellipsis, size: 20),
+                  onPressed: () async {
+                    final action = await _mobileActions(
+                      p.name,
+                      {'delete': _t('删除项目', 'Delete project')},
+                      destructive: {'delete'},
+                    );
+                    if (action == 'delete' && mounted) {
+                      await _deleteProject(p);
+                    }
+                  },
+                ),
+              ],
+            ),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                _Tag(
+                  p.sourceLocale == 'en'
+                      ? _t('英文原文', 'English source')
+                      : _t('中文原文', 'Chinese source'),
+                ),
+                _Tag(
+                  p.totalCount > 0 && ratio == 1
+                      ? _t('译文齐全', 'Complete')
+                      : _t('进行中', 'In progress'),
+                  warm: ratio < 1,
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: ratio.clamp(0.0, 1.0),
+                minHeight: 4,
+                backgroundColor: const Color(0xFFEDF2EA),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _t(
+                '${p.entries.length} 条文案 · ${p.translatedCount}/${p.totalCount} 条译文',
+                '${p.entries.length} ${p.entries.length == 1 ? 'string' : 'strings'} · ${p.translatedCount}/${p.totalCount} translations',
+              ),
+              style: const TextStyle(fontSize: 12, color: _muted),
+            ),
+            if (p.locales.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 5,
+                runSpacing: 5,
+                children: [
+                  for (final locale in p.locales.take(3)) _Tag(locale),
+                  if (p.locales.length > 3) _Tag('+${p.locales.length - 3}'),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    ),
+  );
+
+  Future<T?> _formModal<T>(
+    WidgetBuilder builder, {
+    bool barrierDismissible = true,
+  }) async {
+    final TransitionRoute<T> route = _compact
+        ? CupertinoModalPopupRoute<T>(
+            builder: builder,
+            barrierDismissible: false,
+          )
+        : DialogRoute<T>(
+            context: context,
+            builder: builder,
+            barrierDismissible: barrierDismissible,
+          );
+    final result = await Navigator.of(context).push(route);
+    await route.completed;
+    return result;
+  }
+
+  Future<String?> _mobileActions(
+    String title,
+    Map<String, String> actions, {
+    Set<String> destructive = const {},
+    Set<String> disabled = const {},
+  }) => showCupertinoModalPopup<String>(
+    context: context,
+    builder: (context) => CupertinoActionSheet(
+      title: Text(title),
+      actions: [
+        for (final action in actions.entries.where(
+          (action) => !disabled.contains(action.key),
+        ))
+          CupertinoActionSheetAction(
+            isDestructiveAction: destructive.contains(action.key),
+            onPressed: () => Navigator.pop(context, action.key),
+            child: Text(action.value),
+          ),
+      ],
+      cancelButton: CupertinoActionSheetAction(
+        isDefaultAction: true,
+        onPressed: () => Navigator.pop(context),
+        child: Text(_t('取消', 'Cancel')),
+      ),
+    ),
+  );
+
+  Widget _formFrame(
+    BuildContext dialogContext, {
+    required String title,
+    required String doneLabel,
+    required Widget child,
+    required VoidCallback? onDone,
+    bool busy = false,
+    double width = 520,
+  }) {
+    final cancel = busy ? null : () => Navigator.pop(dialogContext);
+    if (_compact) {
+      return PopScope(
+        canPop: !busy,
+        child: IosFormSheet(
+          title: title,
+          cancelLabel: _t('取消', 'Cancel'),
+          doneLabel: doneLabel,
+          onCancel: cancel,
+          onDone: onDone,
+          busy: busy,
+          child: child,
+        ),
+      );
+    }
+    return PopScope(
+      canPop: !busy,
+      child: AlertDialog(
+        scrollable: true,
+        title: Text(title),
+        content: SizedBox(width: width, child: child),
+        actions: [
+          TextButton(onPressed: cancel, child: Text(_t('取消', 'Cancel'))),
+          FilledButton(onPressed: onDone, child: Text(doneLabel)),
+        ],
+      ),
+    );
+  }
+
   Future<bool> _newProject() async {
     final name = TextEditingController();
     final description = TextEditingController();
     final form = GlobalKey<FormState>();
     var sourceLocale = _en ? 'en' : 'zh-Hans';
-    final result = await showDialog<bool>(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, updateDialog) => AlertDialog(
-          scrollable: true,
-          title: Text(_t('创建一个新项目', 'Create a new project')),
-          content: SizedBox(
-            width: 390,
-            child: Form(
-              key: form,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextFormField(
-                    controller: name,
-                    autofocus: true,
-                    maxLength: 60,
-                    decoration: InputDecoration(
-                      labelText: _t('项目名称', 'Project name'),
-                      hintText: _t('例如：产品网站', 'For example: Product website'),
-                    ),
-                    validator: (value) => value == null || value.trim().isEmpty
-                        ? _t('请填写项目名称', 'Enter a project name')
-                        : null,
+    final result = await _formModal<bool>(
+      (context) => StatefulBuilder(
+        builder: (context, updateDialog) => _formFrame(
+          context,
+          title: _t('创建一个新项目', 'Create a new project'),
+          doneLabel: _t('创建项目', 'Create project'),
+          width: 390,
+          onDone: () {
+            if (form.currentState!.validate()) Navigator.pop(context, true);
+          },
+          child: Form(
+            key: form,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextFormField(
+                  controller: name,
+                  autofocus: true,
+                  maxLength: 60,
+                  decoration: InputDecoration(
+                    labelText: _t('项目名称', 'Project name'),
+                    hintText: _t('例如：产品网站', 'For example: Product website'),
                   ),
-                  const SizedBox(height: 13),
-                  TextField(
-                    controller: description,
-                    maxLength: 180,
-                    maxLines: 3,
-                    decoration: InputDecoration(
-                      labelText: _t('项目说明（选填）', 'Description (optional)'),
-                      hintText: _t(
-                        '这个项目的文案用于什么地方？',
-                        'Where will these strings be used?',
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    _t('原文语言', 'Source language'),
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
+                  validator: (value) => value == null || value.trim().isEmpty
+                      ? _t('请填写项目名称', 'Enter a project name')
+                      : null,
+                ),
+                const SizedBox(height: 13),
+                TextField(
+                  controller: description,
+                  maxLength: 180,
+                  maxLines: 3,
+                  decoration: InputDecoration(
+                    labelText: _t('项目说明（选填）', 'Description (optional)'),
+                    hintText: _t(
+                      '这个项目的文案用于什么地方？',
+                      'Where will these strings be used?',
                     ),
                   ),
-                  const SizedBox(height: 10),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  _t('原文语言', 'Source language'),
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                if (_compact)
+                  SizedBox(
+                    width: double.infinity,
+                    child: CupertinoSlidingSegmentedControl<String>(
+                      key: const ValueKey('new-project-source-locale'),
+                      groupValue: sourceLocale,
+                      children: {
+                        'zh-Hans': Text(_t('中文', 'Chinese')),
+                        'en': Text(_t('英文', 'English')),
+                      },
+                      onValueChanged: (value) {
+                        if (value != null) {
+                          updateDialog(() => sourceLocale = value);
+                        }
+                      },
+                    ),
+                  )
+                else
                   SegmentedButton<String>(
                     key: const ValueKey('new-project-source-locale'),
                     showSelectedIcon: false,
@@ -1308,30 +1656,17 @@ class _WorkspaceState extends State<_Workspace> {
                     onSelectionChanged: (values) =>
                         updateDialog(() => sourceLocale = values.first),
                   ),
-                  const SizedBox(height: 8),
-                  Text(
-                    _t(
-                      '创建后原文语言不能更改。',
-                      'The source language is fixed after project creation.',
-                    ),
-                    style: const TextStyle(fontSize: 11, color: _muted),
+                const SizedBox(height: 8),
+                Text(
+                  _t(
+                    '创建后原文语言不能更改。',
+                    'The source language is fixed after project creation.',
                   ),
-                ],
-              ),
+                  style: const TextStyle(fontSize: 11, color: _muted),
+                ),
+              ],
             ),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: Text(_t('取消', 'Cancel')),
-            ),
-            FilledButton(
-              onPressed: () {
-                if (form.currentState!.validate()) Navigator.pop(context, true);
-              },
-              child: Text(_t('创建项目', 'Create project')),
-            ),
-          ],
         ),
       ),
     );
@@ -1343,10 +1678,8 @@ class _WorkspaceState extends State<_Workspace> {
       );
       _go(_View.project);
     }
-    Future<void>.delayed(const Duration(milliseconds: 300), () {
-      name.dispose();
-      description.dispose();
-    });
+    name.dispose();
+    description.dispose();
     return result == true;
   }
 
@@ -1360,27 +1693,17 @@ class _WorkspaceState extends State<_Workspace> {
       );
       return;
     }
-    final yes = await showDialog<bool>(
+    final yes = await showAdaptiveConfirmation(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text(_t('删除这个项目？', 'Delete this project?')),
-        content: Text(
-          _t(
-            '“${project.name}”的文案、译文和本地导出记录将被删除。已保存到设备的文件不受影响。',
-            'The strings, translations, and local export history for “${project.name}” will be deleted. Saved files stay on your device.',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: Text(_t('取消', 'Cancel')),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: Text(_t('删除项目', 'Delete project')),
-          ),
-        ],
+      compact: _compact,
+      title: _t('删除这个项目？', 'Delete this project?'),
+      message: _t(
+        '“${project.name}”的文案、译文和本地导出记录将被删除。已保存到设备的文件不受影响。',
+        'The strings, translations, and local export history for “${project.name}” will be deleted. Saved files stay on your device.',
       ),
+      cancelLabel: _t('取消', 'Cancel'),
+      confirmLabel: _t('删除项目', 'Delete project'),
+      destructive: true,
     );
     if (yes == true) {
       c.deleteProject(project.id);
@@ -1418,6 +1741,7 @@ class _WorkspaceState extends State<_Workspace> {
 
   Widget _project() {
     final p = c.currentProject!;
+    if (_compact) return _mobileProject(p);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1625,6 +1949,189 @@ class _WorkspaceState extends State<_Workspace> {
     );
   }
 
+  Widget _mobileProject(Project p) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      _PageHeading(
+        title: p.name,
+        subtitle: p.description.isEmpty
+            ? _t('管理原文和语言包。', 'Manage strings and language packs.')
+            : p.description,
+        back: () => _go(_View.home),
+      ),
+      const SizedBox(height: 10),
+      Semantics(
+        label: _t(
+          '源语言：${p.sourceLocale == 'en' ? '英文' : '简体中文'}（${p.sourceLocale}）',
+          'Source: ${p.sourceLocale == 'en' ? 'English' : 'Simplified Chinese'} (${p.sourceLocale})',
+        ),
+        excludeSemantics: true,
+        child: _Tag(
+          p.sourceLocale == 'en'
+              ? _t('英文原文', 'English source')
+              : _t('中文原文', 'Chinese source'),
+          icon: Icons.language,
+        ),
+      ),
+      const SizedBox(height: 14),
+      _Panel(
+        color: const Color(0xFFEDF5EA),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 44),
+              child: FilledButton.icon(
+                onPressed: p.entries.isEmpty
+                    ? () => _beginInput(false)
+                    : p.selectedEntries.isEmpty || c.running
+                    ? null
+                    : () {
+                        c.applyRecentLocales();
+                        _languageSearch = '';
+                        _go(_View.languages);
+                      },
+                style: FilledButton.styleFrom(minimumSize: const Size(0, 44)),
+                icon: Icon(
+                  p.entries.isEmpty ? Icons.add : Icons.translate,
+                  size: 18,
+                ),
+                label: Text(
+                  p.entries.isEmpty
+                      ? _t('新增文案', 'Add strings')
+                      : _t('翻译未完成项', 'Translate missing items'),
+                ),
+              ),
+            ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 4,
+              runSpacing: 2,
+              children: [
+                if (p.entries.isNotEmpty)
+                  TextButton.icon(
+                    onPressed: () => _beginInput(false),
+                    style: TextButton.styleFrom(minimumSize: const Size(0, 44)),
+                    icon: const Icon(Icons.add, size: 17),
+                    label: Text(_t('新增文案', 'Add strings')),
+                  ),
+                TextButton.icon(
+                  onPressed: () => _beginInput(true),
+                  style: TextButton.styleFrom(minimumSize: const Size(0, 44)),
+                  icon: const Icon(Icons.upload_file, size: 17),
+                  label: Text(_t('导入文档', 'Import document')),
+                ),
+                if (p.entries.isNotEmpty) ...[
+                  TextButton.icon(
+                    onPressed: p.selectedEntries.isEmpty
+                        ? null
+                        : () {
+                            _reviewIndex = 0;
+                            _go(_View.review);
+                          },
+                    style: TextButton.styleFrom(minimumSize: const Size(0, 44)),
+                    icon: const Icon(Icons.fact_check_outlined, size: 17),
+                    label: Text(_t('校对', 'Review')),
+                  ),
+                  TextButton.icon(
+                    onPressed: p.selectedEntries.isEmpty
+                        ? null
+                        : () => _go(_View.export),
+                    style: TextButton.styleFrom(minimumSize: const Size(0, 44)),
+                    icon: const Icon(Icons.file_download_outlined, size: 17),
+                    label: Text(_t('导出语言包', 'Export language packs')),
+                  ),
+                ],
+              ],
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 12),
+      _stats([
+        _Stat(
+          _t('${_sourceName(p)}文案', 'Source strings'),
+          '${p.entries.length}',
+          Icons.notes_rounded,
+        ),
+        _Stat(
+          _t('目标语言', 'Target languages'),
+          '${p.locales.length}',
+          Icons.public_rounded,
+        ),
+        _Stat(
+          _t('译文齐全度', 'Translation progress'),
+          '${p.totalCount == 0 ? 0 : (100 * p.translatedCount / p.totalCount).round()}%',
+          Icons.check_circle_outline,
+        ),
+      ]),
+      const SizedBox(height: 18),
+      Text(
+        _t(
+          '项目文案 · ${p.entries.length}',
+          'Project strings · ${p.entries.length}',
+        ),
+        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+      ),
+      const SizedBox(height: 10),
+      if (p.entries.isEmpty)
+        _Panel(
+          child: Text(
+            p.sourceLocale == 'en'
+                ? _t(
+                    '输入英文或导入英文文档，开始翻译。',
+                    'Enter English text or import an English document to begin.',
+                  )
+                : _t(
+                    '输入中文或导入中文文档，开始翻译。',
+                    'Enter Chinese text or import a Chinese document to begin.',
+                  ),
+            style: const TextStyle(fontSize: 13, color: _muted),
+          ),
+        )
+      else
+        _Panel(
+          padding: EdgeInsets.zero,
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 5,
+                ),
+                child: Row(
+                  children: [
+                    Checkbox(
+                      value: p.entries.every((entry) => entry.selected),
+                      onChanged: c.running
+                          ? null
+                          : (value) {
+                              for (final entry in p.entries) {
+                                c.selectEntry(entry, value == true);
+                              }
+                            },
+                    ),
+                    Expanded(
+                      child: Text(
+                        _t(
+                          '已选择 ${p.selectedEntries.length} 条用于翻译和导出',
+                          '${p.selectedEntries.length} selected for translation and export',
+                        ),
+                        style: const TextStyle(fontSize: 12, color: _muted),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(height: 1),
+              for (var index = 0; index < p.entries.length; index++)
+                _entryRow(p.entries[index], index),
+            ],
+          ),
+        ),
+    ],
+  );
+
   Widget _entryRow(Entry entry, int index) {
     final p = c.currentProject!;
     final done = p.locales
@@ -1633,6 +2140,7 @@ class _WorkspaceState extends State<_Workspace> {
               entry.translations[locale]?.text.trim().isNotEmpty == true,
         )
         .length;
+    if (_compact) return _mobileEntryRow(entry, done, p);
     return Container(
       decoration: const BoxDecoration(
         border: Border(bottom: BorderSide(color: _line)),
@@ -1731,75 +2239,221 @@ class _WorkspaceState extends State<_Workspace> {
     );
   }
 
+  Widget _mobileEntryRow(Entry entry, int done, Project p) => Container(
+    decoration: const BoxDecoration(
+      border: Border(bottom: BorderSide(color: _line)),
+    ),
+    child: InkWell(
+      onTap: () {
+        if (!entry.selected) c.selectEntry(entry, true);
+        _reviewIndex = _entries.indexWhere((item) => item.id == entry.id);
+        _go(_View.review);
+      },
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        child: Row(
+          children: [
+            Checkbox(
+              value: entry.selected,
+              onChanged: c.running
+                  ? null
+                  : (value) => c.selectEntry(entry, value == true),
+            ),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    entry.source,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 13, height: 1.5),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    entry.key,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 11,
+                      color: _green,
+                    ),
+                  ),
+                  const SizedBox(height: 5),
+                  Text(
+                    '$done/${p.locales.length}',
+                    style: const TextStyle(fontSize: 12, color: _muted),
+                  ),
+                  if (p.locales.isNotEmpty) ...[
+                    const SizedBox(height: 5),
+                    Wrap(
+                      spacing: 4,
+                      runSpacing: 4,
+                      children: [
+                        for (final locale in p.locales.take(3))
+                          _Tag(
+                            locale,
+                            warm:
+                                entry.translations[locale]?.text
+                                    .trim()
+                                    .isNotEmpty !=
+                                true,
+                          ),
+                        if (p.locales.length > 3)
+                          _Tag('+${p.locales.length - 3}'),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            IconButton(
+              tooltip: _t('文案操作', 'String actions'),
+              icon: const Icon(CupertinoIcons.ellipsis, size: 20),
+              onPressed: () async {
+                final action = await _mobileActions(
+                  _t('文案操作', 'String actions'),
+                  {
+                    'edit': _t('编辑原文', 'Edit source'),
+                    'delete': _t('删除文案', 'Delete string'),
+                  },
+                  destructive: {'delete'},
+                  disabled: {if (c.running) 'delete'},
+                );
+                if (!mounted) return;
+                if (action == 'edit') {
+                  await _editEntrySource(entry);
+                } else if (action == 'delete' && !c.running) {
+                  c.deleteEntry(entry);
+                }
+              },
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+
   Widget _workflow(
     int index,
     String title,
     String subtitle, {
     VoidCallback? back,
-  }) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      _PageHeading(
-        title: title,
-        subtitle: subtitle,
-        back: back ?? () => _go(_View.project),
-        eyebrow: 'CREATE A LANGUAGE PACK',
-      ),
-      const SizedBox(height: 24),
-      _Panel(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 17),
-        child: Row(
+  }) => _compact
+      ? Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            for (var step = 0; step < 4; step++)
-              Expanded(
-                child: Column(
-                  children: [
-                    Container(
-                      width: 28,
-                      height: 28,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: step <= index ? _green : const Color(0xFFEDF2E9),
-                        shape: BoxShape.circle,
-                      ),
-                      child: step < index
-                          ? const Icon(
-                              Icons.check,
-                              size: 15,
-                              color: Colors.white,
-                            )
-                          : Text(
-                              '${step + 1}',
-                              style: TextStyle(
-                                color: step <= index ? Colors.white : _muted,
-                                fontSize: 12,
-                              ),
-                            ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      (_en
-                          ? [
-                              'Add content',
-                              'Choose languages',
-                              'Review',
-                              'Export',
-                            ]
-                          : ['添加内容', '选择语言', '翻译校对', '导出语言包'])[step],
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: step <= index ? _green : _muted,
-                      ),
-                    ),
-                  ],
-                ),
+            _PageHeading(
+              title: title,
+              subtitle: subtitle,
+              back: back ?? () => _go(_View.project),
+            ),
+            const SizedBox(height: 14),
+            Container(
+              key: const ValueKey('mobile-workflow-progress'),
+              padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
+              decoration: BoxDecoration(
+                color: const Color(0xFFEDF5EA),
+                border: Border.all(color: _line),
+                borderRadius: BorderRadius.circular(12),
               ),
+              child: Row(
+                children: [
+                  Text(
+                    '${index + 1}/4',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: _green,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: LinearProgressIndicator(
+                        value: (index + 1) / 4,
+                        minHeight: 5,
+                        backgroundColor: const Color(0xFFDCE9D8),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
           ],
-        ),
-      ),
-      const SizedBox(height: 24),
-    ],
-  );
+        )
+      : Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _PageHeading(
+              title: title,
+              subtitle: subtitle,
+              back: back ?? () => _go(_View.project),
+              eyebrow: 'CREATE A LANGUAGE PACK',
+            ),
+            const SizedBox(height: 24),
+            _Panel(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 17),
+              child: Row(
+                children: [
+                  for (var step = 0; step < 4; step++)
+                    Expanded(
+                      child: Column(
+                        children: [
+                          Container(
+                            width: 28,
+                            height: 28,
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              color: step <= index
+                                  ? _green
+                                  : const Color(0xFFEDF2E9),
+                              shape: BoxShape.circle,
+                            ),
+                            child: step < index
+                                ? const Icon(
+                                    Icons.check,
+                                    size: 15,
+                                    color: Colors.white,
+                                  )
+                                : Text(
+                                    '${step + 1}',
+                                    style: TextStyle(
+                                      color: step <= index
+                                          ? Colors.white
+                                          : _muted,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            (_en
+                                ? [
+                                    'Add content',
+                                    'Choose languages',
+                                    'Review',
+                                    'Export',
+                                  ]
+                                : ['添加内容', '选择语言', '翻译校对', '导出语言包'])[step],
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: step <= index ? _green : _muted,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
+          ],
+        );
 
   Widget _inputPage() {
     final document = _view == _View.document;
@@ -1858,9 +2512,10 @@ class _WorkspaceState extends State<_Workspace> {
                   ),
                   const SizedBox(height: 11),
                   TextField(
+                    key: const ValueKey('source-input'),
                     controller: _input,
-                    minLines: 10,
-                    maxLines: 18,
+                    minLines: _compact ? 6 : 10,
+                    maxLines: _compact ? 6 : 18,
                     onChanged: _parseText,
                     decoration: InputDecoration(
                       hintText: project.sourceLocale == 'en'
@@ -1913,10 +2568,13 @@ class _WorkspaceState extends State<_Workspace> {
                   decoration: InputDecoration(
                     labelText: _t('Key 前缀（选填）', 'Key prefix (optional)'),
                     hintText: 'auth → auth_login',
-                    helperText: _t(
-                      '常见文案自动语义命名，自定义文案可在校对时修改。',
-                      'Common strings get suggested keys. You can edit keys during review.',
-                    ),
+                    helperText: _compact
+                        ? _t('可在校对时修改 Key。', 'You can edit keys during review.')
+                        : _t(
+                            '常见文案自动语义命名，自定义文案可在校对时修改。',
+                            'Common strings get suggested keys. You can edit keys during review.',
+                          ),
+                    helperMaxLines: _compact ? 3 : 1,
                   ),
                 ),
                 const SizedBox(height: 15),
@@ -2076,7 +2734,10 @@ class _WorkspaceState extends State<_Workspace> {
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
       Container(
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 36),
+        padding: EdgeInsets.symmetric(
+          horizontal: _compact ? 16 : 24,
+          vertical: _compact ? 20 : 36,
+        ),
         decoration: BoxDecoration(
           color: const Color(0xFFF8FBF5),
           border: Border.all(color: const Color(0xFFCBDEC8)),
@@ -2084,13 +2745,17 @@ class _WorkspaceState extends State<_Workspace> {
         ),
         child: Column(
           children: [
-            const Icon(Icons.upload_file_outlined, size: 43, color: _green),
-            const SizedBox(height: 15),
+            Icon(
+              Icons.upload_file_outlined,
+              size: _compact ? 32 : 43,
+              color: _green,
+            ),
+            SizedBox(height: _compact ? 10 : 15),
             Text(
               _t('选择需要翻译的文档', 'Choose a document to translate'),
               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
             ),
-            const SizedBox(height: 9),
+            SizedBox(height: _compact ? 6 : 9),
             Text(
               _t(
                 'TXT · Markdown · DOCX\n最大 10 MB，最多 1,000 个内容块',
@@ -2099,7 +2764,7 @@ class _WorkspaceState extends State<_Workspace> {
               textAlign: TextAlign.center,
               style: const TextStyle(fontSize: 12, color: _muted, height: 1.9),
             ),
-            const SizedBox(height: 20),
+            SizedBox(height: _compact ? 12 : 20),
             FilledButton.icon(
               onPressed: _importing
                   ? null
@@ -2915,6 +3580,8 @@ class _WorkspaceState extends State<_Workspace> {
           children: p.locales
               .map(
                 (code) => ChoiceChip(
+                  key: ValueKey('review-locale-$code'),
+                  showCheckmark: false,
                   label: Text(_localeLabel(code)),
                   selected: code == _locale,
                   onSelected: (_) => setState(() => _locale = code),
@@ -3092,66 +3759,54 @@ class _WorkspaceState extends State<_Workspace> {
                   ),
                   const SizedBox(height: 12),
                 ],
-                Wrap(
-                  spacing: 12,
-                  runSpacing: 10,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Checkbox(
-                          value: value.reviewed,
-                          onChanged: value.text.trim().isEmpty
-                              ? null
-                              : (checked) => c.reviewTranslation(
-                                  entry,
-                                  _locale,
-                                  checked == true,
-                                ),
-                        ),
-                        InkWell(
-                          onTap: value.text.trim().isEmpty
-                              ? null
-                              : () => c.reviewTranslation(
-                                  entry,
-                                  _locale,
-                                  !value.reviewed,
-                                ),
-                          child: Text(
-                            _t('已人工校对确认', 'Reviewed and confirmed'),
-                            style: const TextStyle(fontSize: 12),
+                if (_compact)
+                  _mobileReviewActions(entry, value)
+                else
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 10,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Checkbox(
+                            value: value.reviewed,
+                            onChanged: value.text.trim().isEmpty
+                                ? null
+                                : (checked) => c.reviewTranslation(
+                                    entry,
+                                    _locale,
+                                    checked == true,
+                                  ),
                           ),
-                        ),
-                      ],
-                    ),
-                    OutlinedButton.icon(
-                      onPressed: c.running
-                          ? null
-                          : () => _retranslate(entry, value),
-                      icon: const Icon(Icons.refresh, size: 17),
-                      label: Text(_t('重新翻译', 'Translate again')),
-                    ),
-                  ],
-                ),
+                          InkWell(
+                            onTap: value.text.trim().isEmpty
+                                ? null
+                                : () => c.reviewTranslation(
+                                    entry,
+                                    _locale,
+                                    !value.reviewed,
+                                  ),
+                            child: Text(
+                              _t('已人工校对确认', 'Reviewed and confirmed'),
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                          ),
+                        ],
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: c.running
+                            ? null
+                            : () => _retranslate(entry, value),
+                        icon: const Icon(Icons.refresh, size: 17),
+                        label: Text(_t('重新翻译', 'Translate again')),
+                      ),
+                    ],
+                  ),
                 const SizedBox(height: 20),
                 const Divider(),
-                _footer(
-                  TextButton.icon(
-                    onPressed: _reviewIndex == 0
-                        ? null
-                        : () => setState(() => _reviewIndex--),
-                    icon: const Icon(Icons.chevron_left),
-                    label: Text(_t('上一条', 'Previous')),
-                  ),
-                  TextButton.icon(
-                    onPressed: _reviewIndex == entries.length - 1
-                        ? null
-                        : () => setState(() => _reviewIndex++),
-                    icon: const Icon(Icons.chevron_right),
-                    label: Text(_t('下一条', 'Next')),
-                  ),
-                ),
+                _reviewEntryNavigation(entries.length),
               ],
             ),
           ),
@@ -3196,6 +3851,103 @@ class _WorkspaceState extends State<_Workspace> {
     );
   }
 
+  Widget _mobileReviewActions(Entry entry, TranslationValue value) {
+    final canConfirm = value.text.trim().isNotEmpty;
+    final style = OutlinedButton.styleFrom(
+      minimumSize: const Size(0, 48),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+      textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    );
+    return Row(
+      key: const ValueKey('review-action-bar'),
+      children: [
+        Expanded(
+          child: MergeSemantics(
+            child: Semantics(
+              checked: value.reviewed,
+              child: OutlinedButton(
+                key: const ValueKey('review-confirmation-toggle'),
+                onPressed: canConfirm
+                    ? () => c.reviewTranslation(entry, _locale, !value.reviewed)
+                    : null,
+                style: style.copyWith(
+                  backgroundColor: WidgetStatePropertyAll(
+                    value.reviewed
+                        ? const Color(0xFFE0F1E6)
+                        : const Color(0xFFF5F8F4),
+                  ),
+                  side: WidgetStatePropertyAll(
+                    BorderSide(color: value.reviewed ? _green : _line),
+                  ),
+                ),
+                child: Text(
+                  value.reviewed
+                      ? _t('已确认', 'Confirmed')
+                      : _t('确认译文', 'Confirm'),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: OutlinedButton(
+            key: const ValueKey('review-retranslate'),
+            onPressed: c.running ? null : () => _retranslate(entry, value),
+            style: style,
+            child: Text(_t('重新翻译', 'Retranslate'), textAlign: TextAlign.center),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _reviewEntryNavigation(int count) {
+    final buttonStyle = _compact
+        ? TextButton.styleFrom(
+            minimumSize: const Size(44, 44),
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            textStyle: const TextStyle(fontSize: 13),
+          )
+        : null;
+    final previous = TextButton.icon(
+      key: const ValueKey('review-entry-previous'),
+      style: buttonStyle,
+      onPressed: _reviewIndex == 0
+          ? null
+          : () => setState(() => _reviewIndex--),
+      icon: Icon(Icons.chevron_left, size: _compact ? 18 : null),
+      label: Text(_t('上一条', 'Previous')),
+    );
+    final next = TextButton.icon(
+      key: const ValueKey('review-entry-next'),
+      style: buttonStyle,
+      onPressed: _reviewIndex == count - 1
+          ? null
+          : () => setState(() => _reviewIndex++),
+      icon: Icon(Icons.chevron_right, size: _compact ? 18 : null),
+      label: Text(_t('下一条', 'Next')),
+    );
+    if (!_compact) return _footer(previous, next);
+    return Row(
+      key: const ValueKey('review-entry-navigation'),
+      children: [
+        Expanded(child: previous),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6),
+          child: Text(
+            '${_reviewIndex + 1} / $count',
+            key: const ValueKey('review-entry-counter'),
+            style: const TextStyle(fontSize: 13, color: _muted),
+          ),
+        ),
+        Expanded(child: next),
+      ],
+    );
+  }
+
   String _translationLabel(TranslationValue value) {
     if (value.reviewed) return _t('已人工确认', 'Confirmed');
     if (value.edited) return _t('人工编辑 · 待确认', 'Edited · review needed');
@@ -3211,27 +3963,17 @@ class _WorkspaceState extends State<_Workspace> {
 
   Future<void> _retranslate(Entry entry, TranslationValue value) async {
     if (value.edited || value.reviewed) {
-      final yes = await showDialog<bool>(
+      final yes = await showAdaptiveConfirmation(
         context: context,
-        builder: (context) => AlertDialog(
-          title: Text(_t('替换人工校对过的译文？', 'Replace the reviewed translation?')),
-          content: Text(
-            _t(
-              '原文将重新发送给翻译服务。新译文成功返回后替换当前内容，失败时保留现有译文。',
-              'The source will be sent again. A successful result replaces the current translation; a failed request keeps it.',
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: Text(_t('取消', 'Cancel')),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: Text(_t('重新翻译并替换', 'Translate and replace')),
-            ),
-          ],
+        compact: _compact,
+        title: _t('替换人工校对过的译文？', 'Replace the reviewed translation?'),
+        message: _t(
+          '原文将重新发送给翻译服务。新译文成功返回后替换当前内容，失败时保留现有译文。',
+          'The source will be sent again. A successful result replaces the current translation; a failed request keeps it.',
         ),
+        cancelLabel: _t('取消', 'Cancel'),
+        confirmLabel: _t('重新翻译并替换', 'Translate and replace'),
+        destructive: true,
       );
       if (yes != true || !mounted) return;
     }
@@ -3270,80 +4012,91 @@ class _WorkspaceState extends State<_Workspace> {
     bool allowEmpty = false,
   }) async {
     final text = TextEditingController(text: initial);
-    final result = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        scrollable: true,
-        title: Text(title),
-        content: SizedBox(
-          width: 520,
-          child: TextField(
+    final form = GlobalKey<FormState>();
+    final result = await _formModal<String>(
+      (context) => _formFrame(
+        context,
+        title: title,
+        doneLabel: _t('保存', 'Save'),
+        onDone: () {
+          if (form.currentState!.validate()) {
+            Navigator.pop(context, text.text);
+          }
+        },
+        child: Form(
+          key: form,
+          child: TextFormField(
             controller: text,
             autofocus: true,
             minLines: lines,
             maxLines: 14,
+            validator: (value) =>
+                !allowEmpty && (value == null || value.trim().isEmpty)
+                ? _t('请输入内容', 'Enter some text')
+                : null,
             decoration: InputDecoration(helperText: helper, helperMaxLines: 3),
           ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(_t('取消', 'Cancel')),
-          ),
-          FilledButton(
-            onPressed: () {
-              if (allowEmpty || text.text.trim().isNotEmpty) {
-                Navigator.pop(context, text.text);
-              }
-            },
-            child: Text(_t('保存', 'Save')),
-          ),
-        ],
       ),
     );
-    Future<void>.delayed(const Duration(milliseconds: 300), text.dispose);
+    text.dispose();
     return result;
   }
 
   void _showIssues() {
     final issues = c.validate();
+    final title = _t('语言包完整性检查', 'Language pack integrity check');
+    final content = SizedBox(
+      width: 520,
+      child: issues.isEmpty
+          ? Text(
+              _t(
+                'Key 唯一、译文齐全、占位符一致。翻译的语义准确性仍需人工检查。',
+                'Keys are unique, translations are complete, and placeholders match. Meaning still needs human review.',
+              ),
+            )
+          : ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 420),
+              child: ListView.separated(
+                shrinkWrap: true,
+                itemCount: issues.length,
+                separatorBuilder: (_, index) => const Divider(),
+                itemBuilder: (_, index) => ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(
+                    Icons.error_outline,
+                    color: Color(0xFFA8803D),
+                    size: 20,
+                  ),
+                  title: Text(
+                    _localizeError(issues[index].message),
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                  subtitle: issues[index].locale == null
+                      ? null
+                      : Text(_localeLabel(issues[index].locale!)),
+                ),
+              ),
+            ),
+    );
+    if (_compact) {
+      _formModal<void>(
+        (context) => IosFormSheet(
+          title: title,
+          cancelLabel: _t('取消', 'Cancel'),
+          doneLabel: _t('知道了', 'OK'),
+          showCancel: false,
+          onDone: () => Navigator.pop(context),
+          child: content,
+        ),
+      );
+      return;
+    }
     showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(_t('语言包完整性检查', 'Language pack integrity check')),
-        content: SizedBox(
-          width: 520,
-          child: issues.isEmpty
-              ? Text(
-                  _t(
-                    'Key 唯一、译文齐全、占位符一致。翻译的语义准确性仍需人工检查。',
-                    'Keys are unique, translations are complete, and placeholders match. Meaning still needs human review.',
-                  ),
-                )
-              : ConstrainedBox(
-                  constraints: const BoxConstraints(maxHeight: 420),
-                  child: ListView.separated(
-                    shrinkWrap: true,
-                    itemCount: issues.length,
-                    separatorBuilder: (_, index) => const Divider(),
-                    itemBuilder: (_, index) => ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: const Icon(
-                        Icons.error_outline,
-                        color: Color(0xFFA8803D),
-                        size: 20,
-                      ),
-                      title: Text(
-                        _localizeError(issues[index].message),
-                        style: const TextStyle(fontSize: 13),
-                      ),
-                      subtitle: issues[index].locale == null
-                          ? null
-                          : Text(_localeLabel(issues[index].locale!)),
-                    ),
-                  ),
-                ),
-        ),
+        title: Text(title),
+        content: content,
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
@@ -4082,28 +4835,57 @@ class _WorkspaceState extends State<_Workspace> {
   Widget _providerSettings() => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      DropdownButtonFormField<String>(
-        key: ValueKey('primary-${c.settings.providerOrder.first}'),
-        initialValue: c.settings.providerOrder.first,
-        decoration: InputDecoration(
-          labelText: _t('首选翻译平台', 'Preferred provider'),
+      if (_compact)
+        CupertinoButton(
+          padding: EdgeInsets.zero,
+          onPressed: () async {
+            final provider = await _mobileActions(
+              _t('首选翻译平台', 'Preferred provider'),
+              {for (final provider in translationProviders) provider: provider},
+            );
+            if (provider == null || !mounted) return;
+            await _guard(
+              () => c.saveProviderOrder([
+                provider,
+                ...c.settings.providerOrder.where((value) => value != provider),
+              ]),
+            );
+          },
+          child: InputDecorator(
+            decoration: InputDecoration(
+              labelText: _t('首选翻译平台', 'Preferred provider'),
+            ),
+            child: Row(
+              children: [
+                Expanded(child: Text(c.settings.providerOrder.first)),
+                const Icon(CupertinoIcons.chevron_down, size: 16),
+              ],
+            ),
+          ),
+        )
+      else
+        DropdownButtonFormField<String>(
+          key: ValueKey('primary-${c.settings.providerOrder.first}'),
+          initialValue: c.settings.providerOrder.first,
+          decoration: InputDecoration(
+            labelText: _t('首选翻译平台', 'Preferred provider'),
+          ),
+          items: translationProviders
+              .map(
+                (provider) =>
+                    DropdownMenuItem(value: provider, child: Text(provider)),
+              )
+              .toList(),
+          onChanged: (provider) {
+            if (provider == null) return;
+            _guard(
+              () => c.saveProviderOrder([
+                provider,
+                ...c.settings.providerOrder.where((value) => value != provider),
+              ]),
+            );
+          },
         ),
-        items: translationProviders
-            .map(
-              (provider) =>
-                  DropdownMenuItem(value: provider, child: Text(provider)),
-            )
-            .toList(),
-        onChanged: (provider) {
-          if (provider == null) return;
-          _guard(
-            () => c.saveProviderOrder([
-              provider,
-              ...c.settings.providerOrder.where((value) => value != provider),
-            ]),
-          );
-        },
-      ),
       SwitchListTile.adaptive(
         contentPadding: EdgeInsets.zero,
         title: Text(
@@ -4122,35 +4904,185 @@ class _WorkspaceState extends State<_Workspace> {
           () => c.saveProviderOrder(c.settings.providerOrder, fallback: value),
         ),
       ),
-      for (final provider in translationProviders) _providerCard(provider),
       const SizedBox(height: 12),
-      Row(
-        children: [
-          Expanded(
-            child: Text(
-              _backupConfigured == true
-                  ? _t(
-                      '开发者访问码已验证，可使用授权服务',
-                      'Developer access code verified. Authorized service is available.',
-                    )
-                  : _t(
-                      '开发者服务需访问码授权；自备密钥可独立配置。',
-                      'Developer service requires an access code. You can also configure your own key.',
-                    ),
-              style: const TextStyle(fontSize: 11, color: _muted),
+      for (var i = 0; i < translationProviders.length; i++) ...[
+        if (i > 0) const Divider(height: 1),
+        _providerRow(translationProviders[i]),
+      ],
+    ],
+  );
+
+  Future<void> _openSettingsDetail(String title, WidgetBuilder builder) =>
+      Navigator.of(context).push<void>(
+        CupertinoPageRoute<void>(
+          builder: (_) => SettingsDetailPage(
+            title: title,
+            english: _en,
+            listenable: c,
+            builder: builder,
+          ),
+        ),
+      );
+
+  String _providerStatus(String provider) {
+    final credentials = c.credentialsFor(provider);
+    if (provider == 'MyMemory' && credentials.isEmpty) {
+      return _t('可匿名使用', 'Anonymous');
+    }
+    if (!providerCredentialsReady(provider, credentials)) {
+      return credentials.isEmpty
+          ? _t('未配置', 'Not configured')
+          : _t('待完善', 'Incomplete');
+    }
+    final status = c.credentialValidationFor(provider).status;
+    return switch (status) {
+      'checking' => _t('验证中…', 'Checking…'),
+      'valid' => _t('已验证', 'Verified'),
+      'invalid' => _t('验证未通过', 'Check failed'),
+      _ => _t('已配置', 'Configured'),
+    };
+  }
+
+  Widget _providerRow(String provider) {
+    final order = c.settings.providerOrder;
+    final validation = c.credentialValidationFor(provider);
+    final status = Text(
+      _providerStatus(provider),
+      key: ValueKey('provider-summary-$provider'),
+      style: TextStyle(
+        fontSize: 12,
+        color: validation.status == 'invalid'
+            ? const Color(0xFF9B4B39)
+            : validation.status == 'valid'
+            ? _green
+            : _muted,
+      ),
+    );
+    final name = Text(
+      provider,
+      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+    );
+    return Row(
+      children: [
+        Semantics(
+          label: _t('启用 $provider', 'Enable $provider'),
+          child: Checkbox(
+            key: ValueKey('provider-enable-$provider'),
+            value: order.contains(provider),
+            onChanged: (enabled) => _guard(
+              () => c.saveProviderOrder(
+                enabled == true
+                    ? [...order, provider]
+                    : order.where((value) => value != provider).toList(),
+              ),
             ),
           ),
-          const SizedBox(width: 8),
-          OutlinedButton(
-            onPressed: _checkBackupConnection,
-            child: Text(_t('检测服务', 'Check service')),
+        ),
+        Expanded(
+          child: Semantics(
+            button: true,
+            child: InkWell(
+              key: ValueKey('provider-details-$provider'),
+              borderRadius: BorderRadius.circular(10),
+              onTap: () => _openSettingsDetail(
+                provider,
+                (_) => _providerDetail(provider),
+              ),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(minHeight: 64),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 4,
+                    vertical: 12,
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: LayoutBuilder(
+                          builder: (context, constraints) {
+                            if (constraints.maxWidth < 220 ||
+                                MediaQuery.textScalerOf(context).scale(1) >
+                                    1.2) {
+                              return Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  name,
+                                  const SizedBox(height: 4),
+                                  status,
+                                ],
+                              );
+                            }
+                            return Row(
+                              children: [
+                                Expanded(child: name),
+                                const SizedBox(width: 8),
+                                status,
+                              ],
+                            );
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      const Icon(
+                        CupertinoIcons.chevron_forward,
+                        size: 16,
+                        color: _muted,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           ),
-        ],
+        ),
+      ],
+    );
+  }
+
+  Widget _myMemorySettings() => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      TextFormField(
+        key: ValueKey('email-${c.settings.email}'),
+        initialValue: c.settings.email,
+        readOnly: true,
+        keyboardType: TextInputType.emailAddress,
+        decoration: InputDecoration(
+          labelText: _t(
+            'MyMemory 联系邮箱（选填）',
+            'MyMemory contact email (optional)',
+          ),
+          hintText: 'you@example.com',
+          helperText: _t(
+            '仅填写你自己的有效邮箱，会随翻译请求发送。',
+            'Use your own valid email. It is sent with translation requests.',
+          ),
+          helperMaxLines: 2,
+        ),
+        onFieldSubmitted: (value) => _saveSettings(email: value),
+      ),
+      const SizedBox(height: 10),
+      TextButton.icon(
+        onPressed: () async {
+          final email = await _textDialog(
+            _t('设置 MyMemory 联系邮箱', 'Set MyMemory contact email'),
+            c.settings.email,
+            lines: 1,
+            allowEmpty: true,
+            helper: _t(
+              '提交后会随翻译请求发送。留空使用匿名额度。',
+              'It will be sent with requests. Leave blank for anonymous use.',
+            ),
+          );
+          if (email != null) await _saveSettings(email: email.trim());
+        },
+        icon: const Icon(Icons.edit_outlined, size: 16),
+        label: Text(_t('修改联系邮箱', 'Change contact email')),
       ),
     ],
   );
 
-  Widget _providerCard(String provider) {
+  Widget _providerDetail(String provider) {
     final order = c.settings.providerOrder;
     final index = order.indexOf(provider);
     final configured = providerCredentialsReady(
@@ -4193,141 +5125,174 @@ class _WorkspaceState extends State<_Workspace> {
         'Alibaba Cloud allowance is shared across subaccounts. Usage beyond the allowance is billed. Set limits before use.',
       ),
     };
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _Panel(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Checkbox(
-                value: index >= 0,
-                key: ValueKey('provider-enable-$provider'),
-                onChanged: (enabled) => _guard(
-                  () => c.saveProviderOrder(
-                    enabled == true
-                        ? [...order, provider]
-                        : order.where((value) => value != provider).toList(),
-                  ),
+              Text(
+                _t('平台介绍', 'About this provider'),
+                style: const TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
-              Expanded(
-                child: Text(
-                  '$provider${index < 0 ? '' : _t(' · 顺序 ${index + 1}', ' · Order ${index + 1}')}',
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                  ),
+              const SizedBox(height: 12),
+              Text(
+                description,
+                style: const TextStyle(
+                  fontSize: 14,
+                  color: _muted,
+                  height: 1.7,
                 ),
               ),
-              if (index > 0)
-                IconButton(
-                  tooltip: _t('上移 $provider', 'Move $provider up'),
-                  icon: const Icon(Icons.arrow_upward, size: 18),
-                  onPressed: () {
-                    final updated = [...order];
-                    updated[index] = updated[index - 1];
-                    updated[index - 1] = provider;
-                    _guard(() => c.saveProviderOrder(updated));
-                  },
-                ),
             ],
           ),
-          Text(
-            description,
-            style: const TextStyle(fontSize: 11, color: _muted, height: 1.7),
-          ),
-          ...[
-            const SizedBox(height: 6),
-            Text(
-              configured
-                  ? (c.credentialsSaved(provider)
-                        ? _t(
-                            '凭据：•••••• · 已在本机保存',
-                            'Credentials: •••••• · Saved on this device',
-                          )
-                        : _t(
-                            '凭据：•••••• · 仅本次会话',
-                            'Credentials: •••••• · This session only',
-                          ))
-                  : provider == 'MyMemory'
-                  ? _t(
-                      '匿名模式（未配置私有词库密钥）',
-                      'Anonymous mode (no private memory key)',
-                    )
-                  : hasCredentialData
-                  ? _t('凭据尚未填写完整', 'Credentials are incomplete')
-                  : _t('尚未配置凭据', 'Credentials not configured'),
-              style: const TextStyle(fontSize: 11, color: _muted),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              '${validation.status == 'checking'
-                  ? _t('当前验证', 'Current check')
-                  : validation.status == 'unverified'
-                  ? _t('验证状态', 'Verification status')
-                  : _t('上次验证', 'Last check')}${_en ? ': ' : '：'}${_validationLabel(validation)}',
-              key: ValueKey('validation-status-$provider'),
-              style: TextStyle(
-                fontSize: 12,
-                color: validation.status == 'valid'
-                    ? _green
-                    : validation.status == 'invalid'
-                    ? const Color(0xFF9B4B39)
-                    : _muted,
-              ),
-            ),
-            Text(
-              _validationMessage(validation),
-              style: const TextStyle(fontSize: 11, color: _muted, height: 1.6),
-            ),
-            if (validation.billableCharacters != null)
+        ),
+        const SizedBox(height: 14),
+        if (provider == 'MyMemory') ...[
+          _Panel(child: _myMemorySettings()),
+          const SizedBox(height: 14),
+        ],
+        _Panel(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
               Text(
-                validation.billableCharacters == 1
-                    ? _t(
-                        '本次验证最多可能产生 1 字符用量',
-                        'This check may use up to 1 billable character',
-                      )
-                    : _t('本次验证字符用量：0', 'Billable characters for this check: 0'),
-                style: const TextStyle(fontSize: 11, color: _muted),
+                _t('配置与验证', 'Configuration and verification'),
+                style: const TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
-            Wrap(
+              const SizedBox(height: 14),
+              const SizedBox(height: 6),
+              Text(
+                configured
+                    ? (c.credentialsSaved(provider)
+                          ? _t(
+                              '凭据：•••••• · 已在本机保存',
+                              'Credentials: •••••• · Saved on this device',
+                            )
+                          : _t(
+                              '凭据：•••••• · 仅本次会话',
+                              'Credentials: •••••• · This session only',
+                            ))
+                    : provider == 'MyMemory'
+                    ? _t(
+                        '匿名模式（未配置私有词库密钥）',
+                        'Anonymous mode (no private memory key)',
+                      )
+                    : hasCredentialData
+                    ? _t('凭据尚未填写完整', 'Credentials are incomplete')
+                    : _t('尚未配置凭据', 'Credentials not configured'),
+                style: const TextStyle(fontSize: 13, color: _muted),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                '${validation.status == 'checking'
+                    ? _t('当前验证', 'Current check')
+                    : validation.status == 'unverified'
+                    ? _t('验证状态', 'Verification status')
+                    : _t('上次验证', 'Last check')}${_en ? ': ' : '：'}${_validationLabel(validation)}',
+                key: ValueKey('validation-status-$provider'),
+                style: TextStyle(
+                  fontSize: 13,
+                  color: validation.status == 'valid'
+                      ? _green
+                      : validation.status == 'invalid'
+                      ? const Color(0xFF9B4B39)
+                      : _muted,
+                ),
+              ),
+              Text(
+                _validationMessage(validation),
+                style: const TextStyle(
+                  fontSize: 13,
+                  color: _muted,
+                  height: 1.6,
+                ),
+              ),
+              if (validation.billableCharacters != null)
+                Text(
+                  validation.billableCharacters == 1
+                      ? _t(
+                          '本次验证最多可能产生 1 字符用量',
+                          'This check may use up to 1 billable character',
+                        )
+                      : _t(
+                          '本次验证字符用量：0',
+                          'Billable characters for this check: 0',
+                        ),
+                  style: const TextStyle(fontSize: 13, color: _muted),
+                ),
+              Wrap(
+                spacing: 12,
+                children: [
+                  TextButton(
+                    onPressed: () => _providerCredentialDialog(provider),
+                    child: Text(_t('配置 $provider', 'Configure $provider')),
+                  ),
+                  if (configured || provider == 'MyMemory')
+                    TextButton(
+                      key: ValueKey('revalidate-$provider'),
+                      onPressed: validation.status == 'checking'
+                          ? null
+                          : () => unawaited(
+                              c.validateProviderCredentials(
+                                provider,
+                                force: true,
+                              ),
+                            ),
+                      child: Text(
+                        validation.status == 'checking'
+                            ? _t('验证中…', 'Checking…')
+                            : _t('重新验证 $provider', 'Recheck $provider'),
+                      ),
+                    ),
+                  if (hasCredentialData)
+                    TextButton(
+                      onPressed: () =>
+                          _guard(() => c.clearProviderCredentials(provider)),
+                      child: Text(
+                        _t('清除 $provider 凭据', 'Clear $provider credentials'),
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        if (index >= 0) ...[
+          const SizedBox(height: 14),
+          _Panel(
+            child: Wrap(
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
               spacing: 12,
               children: [
-                TextButton(
-                  onPressed: () => _providerCredentialDialog(provider),
-                  child: Text(_t('配置 $provider', 'Configure $provider')),
+                Text(
+                  _t('备用顺序：${index + 1}', 'Fallback order: ${index + 1}'),
+                  style: const TextStyle(fontSize: 14),
                 ),
-                if (configured || provider == 'MyMemory')
-                  TextButton(
-                    key: ValueKey('revalidate-$provider'),
-                    onPressed: validation.status == 'checking'
-                        ? null
-                        : () => unawaited(
-                            c.validateProviderCredentials(
-                              provider,
-                              force: true,
-                            ),
-                          ),
-                    child: Text(
-                      validation.status == 'checking'
-                          ? _t('验证中…', 'Checking…')
-                          : _t('重新验证 $provider', 'Recheck $provider'),
-                    ),
-                  ),
-                if (hasCredentialData)
-                  TextButton(
-                    onPressed: () =>
-                        _guard(() => c.clearProviderCredentials(provider)),
-                    child: Text(
-                      _t('清除 $provider 凭据', 'Clear $provider credentials'),
-                    ),
+                if (index > 0)
+                  TextButton.icon(
+                    onPressed: () {
+                      final updated = [...order];
+                      updated[index] = updated[index - 1];
+                      updated[index - 1] = provider;
+                      _guard(() => c.saveProviderOrder(updated));
+                    },
+                    icon: const Icon(CupertinoIcons.arrow_up, size: 16),
+                    label: Text(_t('上移 $provider', 'Move $provider up')),
                   ),
               ],
             ),
-          ],
+          ),
         ],
-      ),
+      ],
     );
   }
 
@@ -4409,14 +5374,53 @@ class _WorkspaceState extends State<_Workspace> {
     var remember = c.credentialsSaved(provider), saving = false;
     var plan = current['plan'] == 'pro' ? 'pro' : 'free';
     String? error;
-    final route = DialogRoute<void>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, update) => AlertDialog(
-          title: Text(_t('配置 $provider', 'Configure $provider')),
-          content: SizedBox(
-            width: 420,
-            child: SingleChildScrollView(
+    await _formModal<void>(
+      (dialogContext) => StatefulBuilder(
+        builder: (context, update) => _formFrame(
+          dialogContext,
+          title: _t('配置 $provider', 'Configure $provider'),
+          doneLabel: _compact
+              ? _t('保存', 'Save')
+              : _t('保存配置', 'Save configuration'),
+          width: 420,
+          busy: saving,
+          onDone: saving
+              ? null
+              : () async {
+                  update(() {
+                    saving = true;
+                    error = null;
+                  });
+                  try {
+                    await c.saveProviderCredentials(provider, {
+                      for (final entry in controllers.entries)
+                        if (provider != 'ZTAITrans' ||
+                            (developer
+                                ? entry.key == 'developerToken'
+                                : entry.key != 'developerToken'))
+                          entry.key: entry.value.text,
+                      if (provider == 'DeepL') 'plan': plan,
+                    }, remember: remember);
+                    if (dialogContext.mounted) Navigator.pop(dialogContext);
+                  } catch (failure) {
+                    if (dialogContext.mounted) {
+                      update(() {
+                        error = failure is FormatException
+                            ? _localizeError(failure.message)
+                            : _t(
+                                '请检查必填凭据和配置，然后重试。',
+                                'Check required credentials and settings, then try again.',
+                              );
+                        saving = false;
+                      });
+                    }
+                  }
+                },
+          child: FocusScope(
+            canRequestFocus: !saving,
+            descendantsAreFocusable: !saving,
+            child: AbsorbPointer(
+              absorbing: saving,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -4456,7 +5460,23 @@ class _WorkspaceState extends State<_Workspace> {
                         style: const TextStyle(fontSize: 11, color: _muted),
                       ),
                     ),
-                  if (provider == 'DeepL')
+                  if (provider == 'DeepL' && _compact) ...[
+                    const SizedBox(height: 16),
+                    Text(_t('账户接口', 'Account endpoint')),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      width: double.infinity,
+                      child: CupertinoSlidingSegmentedControl<String>(
+                        groupValue: plan,
+                        children: {
+                          'free': Text(_t('免费接口', 'Free')),
+                          'pro': Text(_t('标准接口', 'Pro')),
+                        },
+                        onValueChanged: (value) =>
+                            update(() => plan = value ?? 'free'),
+                      ),
+                    ),
+                  ] else if (provider == 'DeepL')
                     DropdownButtonFormField<String>(
                       initialValue: plan,
                       isExpanded: true,
@@ -4491,21 +5511,58 @@ class _WorkspaceState extends State<_Workspace> {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  CheckboxListTile(
-                    contentPadding: EdgeInsets.zero,
-                    value: remember,
-                    title: Text(
-                      _t('在本机保存凭据', 'Save credentials on this device'),
-                    ),
-                    subtitle: Text(
-                      _t(
-                        '默认仅本次会话。本机保存不额外加密；共享设备请保持关闭。',
-                        'By default, credentials last only for this session. Device storage adds no encryption; leave this off on shared devices.',
+                  if (_compact)
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _t(
+                                  '在本机保存凭据',
+                                  'Save credentials on this device',
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                _t(
+                                  '默认仅本次会话。本机保存不额外加密；共享设备请保持关闭。',
+                                  'By default, credentials last only for this session. Device storage adds no encryption; leave this off on shared devices.',
+                                ),
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: _muted,
+                                  height: 1.5,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        CupertinoSwitch(
+                          value: remember,
+                          onChanged: (value) => update(() => remember = value),
+                        ),
+                      ],
+                    )
+                  else
+                    CheckboxListTile(
+                      contentPadding: EdgeInsets.zero,
+                      value: remember,
+                      title: Text(
+                        _t('在本机保存凭据', 'Save credentials on this device'),
                       ),
+                      subtitle: Text(
+                        _t(
+                          '默认仅本次会话。本机保存不额外加密；共享设备请保持关闭。',
+                          'By default, credentials last only for this session. Device storage adds no encryption; leave this off on shared devices.',
+                        ),
+                      ),
+                      onChanged: (value) =>
+                          update(() => remember = value == true),
                     ),
-                    onChanged: (value) =>
-                        update(() => remember = value == true),
-                  ),
                   if (error != null)
                     Text(
                       error!,
@@ -4515,52 +5572,10 @@ class _WorkspaceState extends State<_Workspace> {
               ),
             ),
           ),
-          actions: [
-            TextButton(
-              onPressed: saving ? null : () => Navigator.pop(dialogContext),
-              child: Text(_t('取消', 'Cancel')),
-            ),
-            FilledButton(
-              onPressed: saving
-                  ? null
-                  : () async {
-                      update(() {
-                        saving = true;
-                        error = null;
-                      });
-                      try {
-                        await c.saveProviderCredentials(provider, {
-                          for (final entry in controllers.entries)
-                            if (provider != 'ZTAITrans' ||
-                                (developer
-                                    ? entry.key == 'developerToken'
-                                    : entry.key != 'developerToken'))
-                              entry.key: entry.value.text,
-                          if (provider == 'DeepL') 'plan': plan,
-                        }, remember: remember);
-                        if (dialogContext.mounted) Navigator.pop(dialogContext);
-                      } catch (failure) {
-                        if (dialogContext.mounted) {
-                          update(() {
-                            error = failure is FormatException
-                                ? _localizeError(failure.message)
-                                : _t(
-                                    '请检查必填凭据和配置，然后重试。',
-                                    'Check required credentials and settings, then try again.',
-                                  );
-                            saving = false;
-                          });
-                        }
-                      }
-                    },
-              child: Text(_t('保存配置', 'Save configuration')),
-            ),
-          ],
         ),
       ),
+      barrierDismissible: false,
     );
-    await Navigator.of(context).push(route);
-    await route.completed;
     for (final controller in controllers.values) {
       controller.dispose();
     }
@@ -4588,54 +5603,18 @@ class _WorkspaceState extends State<_Workspace> {
                 ),
               ),
               const SizedBox(height: 18),
-              _Notice(
+              Text(
                 _t(
-                  '选中的原文仅发送给已启用的平台。MyMemory 无需密钥，其他平台使用你配置的密钥或开发者访问码；凭据默认只在本次会话使用。',
-                  'Selected source text is sent only to enabled providers. MyMemory works without a key. Other providers use the credentials you configure, which stay in this session by default.',
+                  '勾选启用平台，点击平台查看配置和验证。',
+                  'Select providers, then open a row to configure and verify.',
                 ),
-                icon: Icons.shield_outlined,
-              ),
-              const SizedBox(height: 23),
-              TextFormField(
-                key: ValueKey('email-${c.settings.email}'),
-                initialValue: c.settings.email,
-                readOnly: true,
-                keyboardType: TextInputType.emailAddress,
-                decoration: InputDecoration(
-                  labelText: _t(
-                    'MyMemory 联系邮箱（选填）',
-                    'MyMemory contact email (optional)',
-                  ),
-                  hintText: 'you@example.com',
-                  helperText: _t(
-                    '仅填写你自己的有效邮箱，会随翻译请求发送。',
-                    'Use your own valid email. It is sent with translation requests.',
-                  ),
-                  helperMaxLines: 2,
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: _muted,
+                  height: 1.5,
                 ),
-                onFieldSubmitted: (value) => _saveSettings(email: value),
-              ),
-              const SizedBox(height: 10),
-              TextButton.icon(
-                onPressed: () async {
-                  final email = await _textDialog(
-                    _t('设置 MyMemory 联系邮箱', 'Set MyMemory contact email'),
-                    c.settings.email,
-                    lines: 1,
-                    allowEmpty: true,
-                    helper: _t(
-                      '提交后会随翻译请求发送。留空使用匿名额度。',
-                      'It will be sent with requests. Leave blank for anonymous use.',
-                    ),
-                  );
-                  if (email != null) await _saveSettings(email: email.trim());
-                },
-                icon: const Icon(Icons.edit_outlined, size: 16),
-                label: Text(_t('修改联系邮箱', 'Change contact email')),
               ),
               const SizedBox(height: 16),
-              const Divider(),
-              const SizedBox(height: 14),
               _providerSettings(),
             ],
           ),
@@ -4711,6 +5690,30 @@ class _WorkspaceState extends State<_Workspace> {
                         label: Text(_t('恢复内置在线服务', 'Restore built-in service')),
                       ),
                   ],
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          _backupConfigured == true
+                              ? _t(
+                                  '开发者访问码已验证，可使用授权服务',
+                                  'Developer access code verified. Authorized service is available.',
+                                )
+                              : _t(
+                                  '开发者服务需访问码授权；自备密钥可独立配置。',
+                                  'Developer service requires an access code. You can also configure your own key.',
+                                ),
+                          style: const TextStyle(fontSize: 11, color: _muted),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      OutlinedButton(
+                        onPressed: _checkBackupConnection,
+                        child: Text(_t('检测服务', 'Check service')),
+                      ),
+                    ],
+                  ),
                   const SizedBox(height: 18),
                   SwitchListTile.adaptive(
                     contentPadding: EdgeInsets.zero,
@@ -4732,6 +5735,21 @@ class _WorkspaceState extends State<_Workspace> {
                   _summary(_t('Key 命名', 'Key format'), 'snake_case'),
                   _summary(_t('导出格式', 'Export format'), 'UTF-8 JSON / ZIP'),
                 ],
+              ),
+            ),
+            const SizedBox(height: 14),
+            _Panel(
+              padding: EdgeInsets.zero,
+              child: ListTile(
+                key: const ValueKey('settings-privacy-policy'),
+                leading: const Icon(CupertinoIcons.shield, color: _green),
+                title: Text(_t('隐私协议', 'Privacy policy')),
+                subtitle: Text(_t('数据使用与存储说明', 'How data is used and stored')),
+                trailing: const Icon(CupertinoIcons.chevron_forward, size: 16),
+                onTap: () => _openSettingsDetail(
+                  _t('隐私协议', 'Privacy policy'),
+                  (_) => PrivacyPolicyContent(english: _en),
+                ),
               ),
             ),
             const SizedBox(height: 18),
@@ -4811,7 +5829,11 @@ class _WorkspaceState extends State<_Workspace> {
       if (constraints.maxWidth < 800) {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [left, const SizedBox(height: 20), right],
+          children: [
+            left,
+            SizedBox(height: _compact ? 14 : 20),
+            right,
+          ],
         );
       }
       return Row(
@@ -4825,13 +5847,25 @@ class _WorkspaceState extends State<_Workspace> {
     },
   );
 
-  Widget _footer(Widget left, Widget right) => Wrap(
-    alignment: WrapAlignment.spaceBetween,
-    crossAxisAlignment: WrapCrossAlignment.center,
-    spacing: 20,
-    runSpacing: 12,
-    children: [left, right],
-  );
+  Widget _footer(Widget left, Widget right) => _compact
+      ? Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 44),
+              child: right,
+            ),
+            const SizedBox(height: 8),
+            Align(alignment: Alignment.centerLeft, child: left),
+          ],
+        )
+      : Wrap(
+          alignment: WrapAlignment.spaceBetween,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 20,
+          runSpacing: 12,
+          children: [left, right],
+        );
 
   String _date(DateTime date) =>
       '${date.year}/${date.month.toString().padLeft(2, '0')}/${date.day.toString().padLeft(2, '0')}';
@@ -4960,91 +5994,96 @@ class _PageHeading extends StatelessWidget {
   final VoidCallback? back;
   @override
   Widget build(BuildContext context) => LayoutBuilder(
-    builder: (context, constraints) => Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (eyebrow != null) ...[
-          Text(
-            eyebrow!,
-            style: const TextStyle(
-              fontSize: 9,
-              letterSpacing: 1.7,
-              color: _muted,
+    builder: (context, constraints) {
+      final compact = MediaQuery.sizeOf(context).width < 650;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (eyebrow != null && !compact) ...[
+            Text(
+              eyebrow!,
+              style: const TextStyle(
+                fontSize: 9,
+                letterSpacing: 1.7,
+                color: _muted,
+              ),
             ),
-          ),
-          const SizedBox(height: 12),
-        ],
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (back != null) ...[
-              Padding(
-                padding: const EdgeInsets.only(top: 1),
-                child: IconButton.filledTonal(
-                  onPressed: back,
-                  tooltip: '返回',
-                  style: IconButton.styleFrom(
-                    backgroundColor: const Color(0xFFEAF2E5),
-                    foregroundColor: _green,
+            const SizedBox(height: 12),
+          ],
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (back != null) ...[
+                Padding(
+                  padding: const EdgeInsets.only(top: 1),
+                  child: IconButton.filledTonal(
+                    onPressed: back,
+                    tooltip: '返回',
+                    style: IconButton.styleFrom(
+                      backgroundColor: const Color(0xFFEAF2E5),
+                      foregroundColor: _green,
+                    ),
+                    icon: const Icon(Icons.arrow_back, size: 20),
                   ),
-                  icon: const Icon(Icons.arrow_back, size: 20),
+                ),
+                SizedBox(width: compact ? 8 : 11),
+              ],
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(
+                        fontSize: compact
+                            ? 22
+                            : constraints.maxWidth < 600
+                            ? 25
+                            : 30,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: -.7,
+                        height: 1.3,
+                      ),
+                    ),
+                    SizedBox(height: compact ? 5 : 9),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: _muted,
+                        height: compact ? 1.5 : 1.8,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(width: 11),
+              if (action != null && !compact && constraints.maxWidth > 600) ...[
+                const SizedBox(width: 20),
+                action!,
+              ],
             ],
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: TextStyle(
-                      fontSize: constraints.maxWidth < 600 ? 25 : 30,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: -.7,
-                      height: 1.3,
-                    ),
-                  ),
-                  const SizedBox(height: 9),
-                  Text(
-                    subtitle,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: _muted,
-                      height: 1.8,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            if (action != null && constraints.maxWidth > 600) ...[
-              const SizedBox(width: 20),
-              action!,
-            ],
+          ),
+          if (action != null && (compact || constraints.maxWidth <= 600)) ...[
+            SizedBox(height: compact ? 10 : 17),
+            action!,
           ],
-        ),
-        if (action != null && constraints.maxWidth <= 600) ...[
-          const SizedBox(height: 17),
-          action!,
         ],
-      ],
-    ),
+      );
+    },
   );
 }
 
 class _Panel extends StatelessWidget {
-  const _Panel({
-    required this.child,
-    this.padding = const EdgeInsets.all(24),
-    this.color = Colors.white,
-  });
+  const _Panel({required this.child, this.padding, this.color = Colors.white});
   final Widget child;
-  final EdgeInsetsGeometry padding;
+  final EdgeInsetsGeometry? padding;
   final Color color;
   @override
   Widget build(BuildContext context) => Container(
     width: double.infinity,
-    padding: padding,
+    padding:
+        padding ??
+        EdgeInsets.all(MediaQuery.sizeOf(context).width < 650 ? 16 : 24),
     decoration: BoxDecoration(
       color: color,
       border: Border.all(color: _line),
@@ -5148,8 +6187,8 @@ class _Stat extends StatelessWidget {
             children: [
               Text(
                 value,
-                style: const TextStyle(
-                  fontSize: 28,
+                style: TextStyle(
+                  fontSize: MediaQuery.sizeOf(context).width < 650 ? 22 : 28,
                   fontWeight: FontWeight.w500,
                   color: _green,
                 ),
@@ -5176,38 +6215,54 @@ class _Empty extends StatelessWidget {
   final String detail;
   final Widget? action;
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 45, horizontal: 15),
-    child: Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 450),
-        child: Column(
-          children: [
-            Container(
-              width: 65,
-              height: 65,
-              decoration: BoxDecoration(
-                color: const Color(0xFFEDF4E7),
-                borderRadius: BorderRadius.circular(19),
+  Widget build(BuildContext context) {
+    final compact = MediaQuery.sizeOf(context).width < 650;
+    return Padding(
+      padding: EdgeInsets.symmetric(
+        vertical: compact ? 18 : 45,
+        horizontal: compact ? 4 : 15,
+      ),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 450),
+          child: Column(
+            children: [
+              Container(
+                width: compact ? 48 : 65,
+                height: compact ? 48 : 65,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEDF4E7),
+                  borderRadius: BorderRadius.circular(19),
+                ),
+                child: Icon(icon, size: compact ? 25 : 31, color: _green),
               ),
-              child: Icon(icon, size: 31, color: _green),
-            ),
-            const SizedBox(height: 22),
-            Text(
-              title,
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              detail,
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 12, color: _muted, height: 1.9),
-            ),
-            if (action != null) ...[const SizedBox(height: 22), action!],
-          ],
+              SizedBox(height: compact ? 11 : 22),
+              Text(
+                title,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: compact ? 18 : 20,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              SizedBox(height: compact ? 7 : 12),
+              Text(
+                detail,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: _muted,
+                  height: compact ? 1.5 : 1.9,
+                ),
+              ),
+              if (action != null) ...[
+                SizedBox(height: compact ? 12 : 22),
+                action!,
+              ],
+            ],
+          ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }

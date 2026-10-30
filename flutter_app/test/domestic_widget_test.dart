@@ -1,9 +1,11 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:langpack/controller.dart';
 import 'package:langpack/models.dart';
 import 'package:langpack/services/translation_service.dart';
 import 'package:langpack/ui/app.dart';
+import 'package:langpack/ui/ios_modals.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class _DomesticValidationFixture extends TranslationService {
@@ -50,6 +52,10 @@ void main() {
         await tester.pumpWidget(LangPackApp(controller: controller));
         await tester.pumpAndSettle();
         await tapVisible(tester, find.text('设置'));
+        await tapVisible(
+          tester,
+          find.byKey(ValueKey('provider-details-${entry.key}')),
+        );
         await tapVisible(tester, find.text('配置 ${entry.key}'));
         for (final field in entry.value) {
           final finder = find.byKey(ValueKey('credential-${entry.key}-$field'));
@@ -77,15 +83,12 @@ void main() {
             findsNothing,
           );
         }
-        expect(
-          tester
-              .widget<CheckboxListTile>(
-                find.widgetWithText(CheckboxListTile, '在本机保存凭据'),
-              )
-              .value,
-          isFalse,
+        final remember = find.descendant(
+          of: find.byType(IosFormSheet),
+          matching: find.byType(CupertinoSwitch),
         );
-        await tapVisible(tester, find.widgetWithText(FilledButton, '保存配置'));
+        expect(tester.widget<CupertinoSwitch>(remember).value, isFalse);
+        await tapVisible(tester, find.widgetWithText(CupertinoButton, '保存'));
         for (final field in entry.value) {
           expect(
             controller.credentialsFor(entry.key)[field],
@@ -102,6 +105,8 @@ void main() {
           ),
           isNull,
         );
+        await tester.pageBack();
+        await tester.pumpAndSettle();
         await tapVisible(
           tester,
           find.byKey(ValueKey('provider-enable-${entry.key}')),

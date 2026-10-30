@@ -12,6 +12,25 @@
 
 构建执行 `bash scripts/build.sh`，再执行 `node scripts/validate-artifact.mjs`；生成的 `dist/server/index.js` 内嵌静态界面，但不包含运行时密钥。
 
+## GitHub Actions 手动打包与发布
+
+打开 [Manual packages and release](https://github.com/CherryIce/langpack-prototype/actions/workflows/manual-packages.yml)，点击 **Run workflow**，选择分支，再勾选需要的 **APK / Web / macOS / Windows**，支持同时选择多个平台。默认只选 APK；必须至少选择一个平台。工作流会先执行 Flutter 静态检查和测试，然后只构建勾选的平台，不调用真实翻译接口。
+
+| 平台 | 下载内容 |
+| --- | --- |
+| APK | 可安装的 Debug 签名 `.apk`，供测试使用 |
+| Web | Release 静态网站 ZIP；完整平台代理仍需与网站同源部署 |
+| macOS | Release `LangPack.app` ZIP，保留应用包结构；未做开发者签名发布或公证 |
+| Windows | Release ZIP，包含 EXE、DLL 和 `data`，请完整解压运行 |
+
+不勾选 **发布到 GitHub Releases** 时，在运行详情的 **Artifacts** 下载产物，保留 14 天。包名包含运行编号与重跑次数，便于对应源码。
+
+需要发布到仓库的 [Releases 页面](https://github.com/CherryIce/langpack-prototype/releases)时，勾选发布选项，并填写一个**尚未使用的版本标签**，例如 `v1.0.0`。所选平台全部成功后，工作流会收集本次运行的包、生成 `SHA256SUMS.txt`，先上传到草稿，再公开 Release。未选择的平台不会阻止发布；构建失败时不发布。已有标签、正式 Release 或草稿均拒绝覆盖，上传中断留下的草稿需自行检查后处理，重新发布请使用新标签。
+
+Release 绑定本次运行的确切源码提交；标签不会改写 `flutter_app/pubspec.yaml` 中的应用版本。APK 仍是测试调试包，macOS 包未公证，此入口不等同应用商店发布。工作流使用 GitHub 自动提供的令牌，仅发布任务拥有仓库内容写权限，不需要把翻译密钥或签名资料加入仓库。
+
+配置位于 [`.github/workflows/manual-packages.yml`](.github/workflows/manual-packages.yml)，发布校验脚本位于 [`scripts/manual-packages.mjs`](scripts/manual-packages.mjs)。原有 `Flutter multiplatform` 检查流程保留。
+
 ## 已实现
 
 - 项目创建、搜索、文案列表和浏览器本地保存。

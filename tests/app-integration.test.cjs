@@ -22,13 +22,14 @@ function fixture(locales = ['en', 'ja']) {
       { id: 'b', name: '自定义项目 B', description: '', locales: ['en'], icon: 'layers', color: '', entries: [], updatedAt: date }
     ],
     session: { id: 'session-a', projectId: 'a', entries: clone(entries), locales: [...locales], mode: 'text', text: '登录', split: 'line', context: '', status: 'draft', includeSource: true, pretty: true, exportLocales: [...locales] },
-    jobs: [], exports: [], settings: { includeSource: true, pretty: true, translationEmail: '' }, homeFilter: 'all', search: '', reviewLocale: 'en', reviewIndex: 0
+    jobs: [], exports: [], settings: { includeSource: true, pretty: true, translationEmail: '', providerOrder: ['MyMemory', 'ZTAITrans'], providerFallback: true }, homeFilter: 'all', search: '', reviewLocale: 'en', reviewIndex: 0
   };
 }
 function deferred() { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 
 function boot(saved, translate = async () => { throw new Error('Unexpected translation request'); }, options = {}) {
-  const values = new Map([[STORAGE, JSON.stringify(saved)]]);
+  const values = options.localValues || new Map(); values.set(STORAGE, JSON.stringify(saved));
+  const sessionValues = options.sessionValues || new Map([['langpack-provider-session-v1', JSON.stringify({ ZTAITrans: { apiKey: 'fixture-user-owned-ztai-key' } })]]);
   const handlers = new Map(), errors = [], elements = new Map();
   let html = '';
   function element(id) {
@@ -55,7 +56,9 @@ function boot(saved, translate = async () => { throw new Error('Unexpected trans
   };
   const timers = new Set();
   const context = vm.createContext({
-    document, localStorage: { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, String(value)) },
+    document, localStorage: { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, String(value)), removeItem: key => values.delete(key) },
+    sessionStorage: { getItem: key => sessionValues.get(key) ?? null, setItem: (key, value) => sessionValues.set(key, String(value)), removeItem: key => sessionValues.delete(key) },
+    fetch: options.fetch || (async () => { throw new Error('Unexpected fetch in app fixture'); }),
     TextEncoder, TextDecoder, AbortController, Blob, URL, crypto: webcrypto,
     console: { log() {}, warn() {}, error(...args) { errors.push(args); } },
     setTimeout(callback, ms) { const timer = setTimeout(() => { timers.delete(timer); callback(); }, Math.min(ms, 10)); timers.add(timer); return timer; },
@@ -63,15 +66,17 @@ function boot(saved, translate = async () => { throw new Error('Unexpected trans
   });
   context.window = context; context.addEventListener = () => {}; context.scrollTo = () => {};
   vm.runInContext(code('languages.js'), context);
+  vm.runInContext(code('providers.js'), context);
+  vm.runInContext(code('provider-settings.js'), context);
   vm.runInContext(code('engine.js'), context);
   vm.runInContext(code('translation-jobs.js'), context);
-  context.MyMemoryTranslator = { createClient: () => ({ translate }), utf8Length: value => new TextEncoder().encode(value).length };
+  context.MyMemoryTranslator = { createClient: config => { options.onPrimaryConfig?.(config); return { async translate(...args) { const result = await translate(...args); return { provider: 'MyMemory', ...result }; } }; }, utf8Length: value => new TextEncoder().encode(value).length };
   vm.runInContext(code('translation-service.js'), context);
   const service = context.TranslationService;
-  context.TranslationService = { ...service, createBackupClient: () => options.backupFetch ? service.createBackupClient({ fetchImpl: options.backupFetch, maxRetries: 0 }) : ({ translate: options.backupTranslate || (async () => { throw Object.assign(new Error('Backup is unavailable in this regression'), { code: 'BACKUP_NOT_CONFIGURED', provider: 'ZTAITrans', fatal: true }); }) }) };
+  context.TranslationService = { ...service, createProviderClient: args => args.provider === 'ZTAITrans' && options.backupTranslate ? { translate: options.backupTranslate } : service.createProviderClient({ ...args, maxRetries: 0, fetchImpl: options.providerFetch || options.backupFetch || (async () => { throw Object.assign(new Error('No provider request expected'), { code: 'PROVIDER_CONFIG', fatal: true }); }) }) };
   vm.runInContext(code('app.js'), context);
   return {
-    state: () => JSON.parse(values.get(STORAGE)), html: () => html, errors,
+    state: () => JSON.parse(values.get(STORAGE)), html: () => html, errors, localValues: values, sessionValues,
     async click(action, extra = {}) {
       const button = { dataset: { action, ...extra }, disabled: false, closest() { return this; } };
       for (const handler of handlers.get('click') || []) await handler({ target: button });
@@ -144,15 +149,15 @@ test('event-driven batch persists successful results, failures and retry-only-fa
 test('quota errors from both providers stop batch, preserve pending cells and remain visible in actual UI', async t => {
   let primaryCount = 0, backupCount = 0;
   const app = boot(fixture(), async () => { primaryCount++; throw Object.assign(new Error('Daily quota exhausted'), { code: 'QUOTA', quota: true }); }, {
-    backupFetch: async () => { backupCount++; return new Response(JSON.stringify({ code: 'BACKUP_BUDGET', message: 'Budget exhausted' }), { status: 402 }); }
+    backupFetch: async () => { backupCount++; return new Response(JSON.stringify({ code: 'PROVIDER_QUOTA', message: 'Budget exhausted' }), { status: 402 }); }
   });
   t.after(() => app.close());
   await app.click('start-translation'); await until(() => app.state().session.status === 'quota');
   const state = app.state();
   assert.equal(primaryCount, 1); assert.equal(backupCount, 1); assert.equal(state.jobs[0].items[1].status, 'pending');
   assert.equal(state.projects[0].entries[0].translations.en, undefined);
-  assert.equal(state.jobs[0].error.provider, 'ZTAITrans'); assert.equal(state.jobs[0].error.code, 'BACKUP_BUDGET');
-  assert.match(app.html(), /备用服务预算已用完/); assert.doesNotMatch(app.html(), /今日免费额度已用完/);
+  assert.equal(state.jobs[0].error.provider, 'ZTAITrans'); assert.equal(state.jobs[0].error.code, 'PROVIDER_QUOTA');
+  assert.match(app.html(), /ZTAITrans 额度暂不可用/); assert.doesNotMatch(app.html(), /今日免费额度已用完/);
   assert.deepEqual(app.errors, []);
 });
 
@@ -259,16 +264,16 @@ test('primary quota automatically switches the actual app chain to backup and pe
 test('fatal backup authorization failure stops the app job and does not show the primary quota title', async t => {
   let primaryCount = 0, backupCount = 0;
   const app = boot(fixture(), async () => { primaryCount++; throw Object.assign(new Error('Primary quota exhausted'), { code: 'QUOTA', quota: true }); }, {
-    backupFetch: async () => { backupCount++; return new Response(JSON.stringify({ code: 'BACKUP_AUTH', message: 'Unauthorized' }), { status: 401 }); }
+    backupFetch: async () => { backupCount++; return new Response(JSON.stringify({ code: 'PROVIDER_AUTH', message: 'Unauthorized' }), { status: 401 }); }
   });
   t.after(() => app.close());
   await app.click('start-translation'); await until(() => app.state().session.status === 'blocked');
   const state = app.state();
   assert.equal(primaryCount, 1); assert.equal(backupCount, 1);
   assert.equal(state.jobs[0].failed, 1); assert.equal(state.jobs[0].items[1].status, 'pending');
-  assert.equal(state.jobs[0].error.provider, 'ZTAITrans'); assert.equal(state.jobs[0].error.code, 'BACKUP_AUTH');
+  assert.equal(state.jobs[0].error.provider, 'ZTAITrans'); assert.equal(state.jobs[0].error.code, 'PROVIDER_AUTH');
   assert.equal(state.projects[0].entries[0].translations.en, undefined);
-  assert.match(app.html(), /备用翻译服务暂不可用/); assert.doesNotMatch(app.html(), /今日免费额度已用完/);
+  assert.match(app.html(), /翻译平台配置需要处理/); assert.doesNotMatch(app.html(), /今日免费额度已用完/);
   assert.deepEqual(app.errors, []);
 });
 
@@ -398,7 +403,7 @@ test('valid new batch records normalized recent targets, persists on reload and 
   assert.deepEqual(app.state().settings.recentLocales, ['en', 'pt-BR', 'si']);
   assert.equal(app.state().session.entries[0].translationMeta['pt-BR'].provider, 'ZTAITrans');
   assert.equal(app.state().settings.primaryCircuit.until, 0);
-  assert.equal(app.state().settings.lastFallback, undefined);
+  assert.equal(app.state().settings.lastFallback.reason, 'unsupported');
   const reopened = boot(app.state()); t.after(() => reopened.close());
   await reopened.click('project', { id: 'b' }); await reopened.click('add-content');
   assert.deepEqual(reopened.state().session.locales, ['en', 'pt-BR', 'si']);
@@ -494,5 +499,113 @@ test('selecting all produces 34 genuine pipeline results and 35 canonical langua
   const files = app.engine.makePackages(state.session.entries, state.session.locales, true);
   assert.equal(Object.keys(files).length, 35);
   for (const locale of ['pt-BR', 'pt-PT', 'fil', 'nb', 'si']) assert.equal(JSON.parse(files[locale + '.json']).key_one, locale + ' result');
-  assert.equal(state.settings.primaryCircuit.until, 0); assert.equal(state.settings.lastFallback, undefined);
+  assert.equal(state.settings.primaryCircuit.until, 0); assert.equal(state.settings.lastFallback.reason, 'unsupported');
+});
+
+test('migration defaults to MyMemory alone and never spends an implicit shared ZTAI account', async t => {
+  const saved = fixture(['en']); delete saved.settings.providerOrder; delete saved.settings.providerFallback;
+  let providerCalls = 0;
+  const app = boot(saved, async () => { throw Object.assign(new Error('quota'), { quota: true }); }, { sessionValues: new Map(), providerFetch: async () => { providerCalls++; assert.fail('No implicit backup account'); } }); t.after(() => app.close());
+  assert.deepEqual(app.state().settings.providerOrder, ['MyMemory']);
+  await app.click('start-translation'); await until(() => app.state().session.status === 'quota');
+  assert.equal(providerCalls, 0); assert.equal(app.state().jobs[0].error.provider, 'MyMemory');
+});
+
+test('settings select the primary platform and keep session credentials out of state, rendered values, tasks and language exports', async t => {
+  const saved = fixture(['en']); saved.settings.providerOrder = ['MyMemory'];
+  const secret = 'fixture-private-azure-key', requests = [];
+  const app = boot(saved, undefined, { sessionValues: new Map(), providerFetch: async (url, options) => { requests.push(JSON.parse(options.body)); return new Response(JSON.stringify({ provider: 'Azure', text: 'Azure translation' })); } }); t.after(() => app.close());
+  await app.click('nav', { view: 'settings' }); await app.change({ id: 'primary-provider', value: 'Azure', dataset: {} });
+  app.field('provider-Azure-key', secret); app.field('provider-Azure-region', 'eastasia');
+  await app.click('save-provider-credentials', { provider: 'Azure' });
+  assert.deepEqual(app.state().settings.providerOrder, ['Azure', 'MyMemory']);
+  assert.doesNotMatch(JSON.stringify(app.state()), new RegExp(secret)); assert.doesNotMatch(app.html(), new RegExp(secret));
+  assert.equal(app.localValues.get('langpack-provider-credentials-v1'), undefined);
+  assert.match(app.sessionValues.get('langpack-provider-session-v1'), new RegExp(secret));
+  await app.click('project', { id: 'a' }); await app.click('translate-project'); await app.click('start-translation'); await until(() => app.state().session.status === 'completed');
+  assert.deepEqual(requests[0].credentials, { apiKey: secret, region: 'eastasia' }); assert.equal(requests[0].provider, 'Azure');
+  assert.equal(app.state().session.entries[0].translationMeta.en.provider, 'Azure');
+  assert.doesNotMatch(JSON.stringify(app.state()), new RegExp(secret));
+  assert.doesNotMatch(JSON.stringify(app.engine.makePackages(app.state().session.entries, ['en'], true)), new RegExp(secret));
+});
+
+test('configured MyMemory private key uses the protected proxy while deleting it restores anonymous direct translation', async t => {
+  const saved = fixture(['en']); saved.settings.providerOrder = ['MyMemory']; saved.settings.translationEmail = 'owner@example.com';
+  const secret = 'fixture-private-mymemory';
+  const sessionValues = new Map([['langpack-provider-session-v1', JSON.stringify({ MyMemory: { apiKey: secret } })]]);
+  const requests = []; let anonymousCalls = 0;
+  const app = boot(saved, async () => { anonymousCalls++; return { text: 'Anonymous result', provider: 'MyMemory' }; }, { sessionValues, providerFetch: async (url, options) => { requests.push({ url, body: JSON.parse(options.body) }); return new Response(JSON.stringify({ provider: 'MyMemory', text: 'Private result' })); } }); t.after(() => app.close());
+  await app.click('start-translation'); await until(() => app.state().session.status === 'completed');
+  assert.equal(anonymousCalls, 0); assert.equal(requests[0].url, '/api/translation/provider');
+  assert.deepEqual(requests[0].body.credentials, { apiKey: secret, email: 'owner@example.com' });
+  assert.doesNotMatch(JSON.stringify(app.state()), new RegExp(secret));
+  await app.click('nav', { view: 'settings' }); await app.click('delete-provider-credentials', { provider: 'MyMemory' });
+  await app.click('project', { id: 'a' }); await app.click('review-project'); app.field('review-key', 'key_one'); app.field('review-text', 'Private result');
+  await app.click('retranslate'); await until(() => app.state().session.entries[0].translations.en === 'Anonymous result');
+  assert.equal(anonymousCalls, 1); assert.equal(requests.length, 1);
+});
+
+test('explicit remember, session-only replacement and delete clear old credential copies without serializing them into project settings', async t => {
+  const saved = fixture(['en']); saved.settings.providerOrder = ['DeepL'];
+  const app = boot(saved, undefined, { sessionValues: new Map() }); t.after(() => app.close());
+  await app.click('nav', { view: 'settings' }); app.field('provider-DeepL-key', 'fixture-remembered'); app.field('provider-DeepL-plan', 'free'); app.field('provider-DeepL-remember', '').checked = true;
+  await app.click('save-provider-credentials', { provider: 'DeepL' });
+  assert.match(app.localValues.get('langpack-provider-credentials-v1'), /fixture-remembered/);
+  app.field('provider-DeepL-key', 'fixture-session-replacement'); app.field('provider-DeepL-plan', 'pro'); app.field('provider-DeepL-remember', '').checked = false;
+  await app.click('save-provider-credentials', { provider: 'DeepL' });
+  assert.equal(app.localValues.get('langpack-provider-credentials-v1'), undefined);
+  assert.doesNotMatch(app.sessionValues.get('langpack-provider-session-v1'), /fixture-remembered/);
+  const reloaded = boot(app.state(), undefined, { localValues: app.localValues, sessionValues: app.sessionValues }); t.after(() => reloaded.close());
+  assert.doesNotMatch(reloaded.html(), /fixture-session-replacement/);
+  await reloaded.click('delete-provider-credentials', { provider: 'DeepL' });
+  assert.equal(reloaded.sessionValues.get('langpack-provider-session-v1'), undefined);
+  assert.doesNotMatch(JSON.stringify(reloaded.state()), /fixture-session-replacement/);
+});
+
+test('provider authentication failure blocks the batch instead of calling an enabled second platform', async t => {
+  const saved = fixture(['en']); saved.settings.providerOrder = ['DeepL', 'Azure'];
+  saved.session.entries.push(makeEntry('two', '注册')); saved.projects[0].entries = clone(saved.session.entries);
+  const sessionValues = new Map([['langpack-provider-session-v1', JSON.stringify({ DeepL: { apiKey: 'fixture-bad-key', plan: 'free' }, Azure: { apiKey: 'fixture-next-key' } })]]);
+  const calls = [];
+  const app = boot(saved, undefined, { sessionValues, providerFetch: async (_, options) => { calls.push(JSON.parse(options.body).provider); return new Response(JSON.stringify({ provider: 'DeepL', code: 'PROVIDER_AUTH', message: 'fixture-bad-key', fatal: true }), { status: 401 }); } }); t.after(() => app.close());
+  await app.click('start-translation'); await until(() => app.state().session.status === 'blocked');
+  assert.deepEqual(calls, ['DeepL']); assert.equal(app.state().jobs[0].items[1].status, 'pending');
+  assert.doesNotMatch(JSON.stringify(app.state()), /fixture-bad-key|fixture-next-key/);
+});
+
+test('developer verification is a zero-budget status request and saved ZTAI developer authorization never includes a tenant or API key', async t => {
+  const saved = fixture(['en']); saved.settings.providerOrder = ['ZTAITrans'];
+  const statuses = [], translations = [];
+  const app = boot(saved, undefined, { sessionValues: new Map(), fetch: async (url, options) => { statuses.push({ url, options }); return new Response(JSON.stringify({ developerConfigured: true, backupConfigured: true })); }, providerFetch: async (_, options) => { translations.push(JSON.parse(options.body)); return new Response(JSON.stringify({ provider: 'ZTAITrans', text: 'Developer result' })); } }); t.after(() => app.close());
+  await app.click('nav', { view: 'settings' }); app.field('provider-ZTAITrans-developer', 'fixture-developer-token'); app.field('provider-ZTAITrans-mode', 'developer'); app.field('provider-ZTAITrans-tenant', 'must-not-forward');
+  await app.click('verify-developer'); assert.equal(statuses.length, 1); assert.equal(statuses[0].url, '/api/translation/status'); assert.equal(statuses[0].options.headers['X-LangPack-Developer-Token'], 'fixture-developer-token'); assert.equal(statuses[0].options.body, undefined); assert.equal(translations.length, 0);
+  await app.click('save-provider-credentials', { provider: 'ZTAITrans' });
+  assert.doesNotMatch(app.html(), /fixture-developer-token/); assert.doesNotMatch(JSON.stringify(app.state()), /fixture-developer-token/);
+  await app.click('project', { id: 'a' }); await app.click('translate-project'); await app.click('start-translation'); await until(() => app.state().session.status === 'completed');
+  assert.deepEqual(translations[0].credentials, { developerToken: 'fixture-developer-token' });
+});
+
+test('saving a new provider account pauses an active request; its late result cannot overwrite the resumed account result', async t => {
+  const saved = fixture(['en']); saved.settings.providerOrder = ['DeepL'];
+  const sessionValues = new Map([['langpack-provider-session-v1', JSON.stringify({ DeepL: { apiKey: 'fixture-old-account', plan: 'free' } })]]);
+  const first = deferred(); let calls = 0, oldSignal;
+  const app = boot(saved, undefined, { sessionValues, providerFetch: async (_, options) => { calls++; if (calls === 1) { oldSignal = options.signal; return first.promise; } assert.equal(JSON.parse(options.body).credentials.apiKey, 'fixture-new-account'); return new Response(JSON.stringify({ provider: 'DeepL', text: 'New account result' })); } }); t.after(() => app.close());
+  await app.click('start-translation'); await app.click('nav', { view: 'settings' }); app.field('provider-DeepL-key', 'fixture-new-account'); app.field('provider-DeepL-plan', 'free');
+  await app.click('save-provider-credentials', { provider: 'DeepL' });
+  assert.equal(oldSignal.aborted, true); assert.equal(app.state().session.status, 'paused');
+  first.resolve(new Response(JSON.stringify({ provider: 'DeepL', text: 'Old account result' }))); await new Promise(resolve => setImmediate(resolve));
+  await app.click('open-job', { id: app.state().jobs[0].id }); await app.click('resume-translation'); await until(() => app.state().session.status === 'completed');
+  assert.equal(calls, 2); assert.equal(app.state().session.entries[0].translations.en, 'New account result');
+});
+
+test('changing the MyMemory contact identity pauses active work and resumes with the newly configured email', async t => {
+  const saved = fixture(['en']); saved.settings.providerOrder = ['MyMemory'];
+  const first = deferred(), configs = []; let calls = 0;
+  const app = boot(saved, async () => ++calls === 1 ? first.promise : ({ provider: 'MyMemory', text: 'New identity result' }), { sessionValues: new Map(), onPrimaryConfig: value => configs.push(value) }); t.after(() => app.close());
+  await app.click('start-translation'); await app.click('nav', { view: 'settings' }); app.field('translation-email', 'new-owner@example.com'); await app.click('save-translation-settings');
+  assert.equal(app.state().session.status, 'paused');
+  first.resolve({ provider: 'MyMemory', text: 'Old anonymous result' }); await new Promise(resolve => setImmediate(resolve));
+  await app.click('open-job', { id: app.state().jobs[0].id }); await app.click('resume-translation'); await until(() => app.state().session.status === 'completed');
+  assert.deepEqual(configs.map(value => value.email), ['', 'new-owner@example.com']);
+  assert.equal(app.state().session.entries[0].translations.en, 'New identity result');
 });

@@ -36,6 +36,14 @@ test('real endpoint, language mapping and credential-free request options are co
   assert.equal(result.requestCount, 1);
 });
 
+test('anonymous MyMemory requests never put private credentials into a browser GET URL', async () => {
+  let seen;
+  const client = M.createClient(options({ fetchImpl: async url => { seen = new URL(url); return response('Log in'); } }));
+  await client.translate('login', 'en');
+  assert.equal(seen.searchParams.has('key'), false);
+  for (const config of [{ apiKey: 'fixture-private-memory' }, { key: 'fixture-legacy-option' }]) assert.throws(() => M.createClient(options(config)), { code: 'CONFIG', fatal: true });
+});
+
 test('all supported placeholder forms and duplicate occurrences survive marker protection', async () => {
   const client = M.createClient(options({ fetchImpl: async url => {
     const q = new URL(url).searchParams.get('q');
@@ -162,6 +170,23 @@ test('trusted quota flags, service diagnostics and prefixed warnings still halt 
     const client = M.createClient(options({ fetchImpl: async () => { calls++; return response(text, { status: 200, serviceStatus: 200, ...fields }); } }));
     await assert.rejects(client.translate('登录', 'en'), { code: 'QUOTA', quota: true, retryable: false });
     assert.equal(calls, 1); assert.equal(client.getUsage().cacheEntries, 0);
+  });
+});
+
+test('transport authentication and service 401 stop before contradictory quota flags, while observed service 403 quota remains compatible', async t => {
+  const warning = 'MYMEMORY WARNING: YOU USED ALL AVAILABLE FREE TRANSLATIONS FOR TODAY';
+  for (const [name, fields, expected] of [
+    ['HTTP 401', { status: 401, quotaFinished: true }, { code: 'REQUEST', fatal: true, quota: false }],
+    ['HTTP 403', { status: 403, quotaFinished: true, details: warning }, { code: 'REQUEST', fatal: true, quota: false }],
+    ['service 401', { status: 200, serviceStatus: 401, quotaFinished: true, details: warning }, { code: 'REQUEST', fatal: true, quota: false }],
+    ['service 403 authentication', { status: 200, serviceStatus: 403, quotaFinished: false }, { code: 'REQUEST', fatal: true, quota: false }],
+    ['observed service 403 quota', { status: 200, serviceStatus: 403, quotaFinished: true, details: warning }, { code: 'QUOTA', fatal: false, quota: true }]
+  ]) await t.test(name, async () => {
+    let calls = 0;
+    const text = name === 'service 403 authentication' ? 'Access denied' : warning;
+    const client = M.createClient(options({ fetchImpl: async () => { calls++; return response(text, fields); } }));
+    await assert.rejects(client.translate('登录', 'en'), expected);
+    assert.equal(calls, 1);
   });
 });
 

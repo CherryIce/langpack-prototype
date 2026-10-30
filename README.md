@@ -1,14 +1,14 @@
-# 译包 LangPack · 主备真实翻译
+# 译包 LangPack · 多平台真实翻译
 
 **[在线体验：译包 LangPack · 多语言工作台](https://langpack-standalone.406859116.workers.dev/)**（Cloudflare Workers 独立部署）
 
-完整体验：项目首页 → 文本输入 / 文档导入 → 多选语言 → MyMemory 翻译 → 校对 → JSON / ZIP 下载。
+完整体验：项目首页 → 文本输入 / 文档导入 → 多选语言 → 选择的平台翻译 → 校对 → JSON / ZIP 下载。
 
 ## 打开
 
-前端源码位于 `web/`，服务端代理位于 `worker/`。[在线版本](https://langpack-standalone.406859116.workers.dev/) 已独立部署到 Cloudflare Workers，普通使用者无需配置翻译密钥。
+前端源码位于 `web/`，服务端代理位于 `worker/`。[在线版本](https://langpack-standalone.406859116.workers.dev/) 已独立部署到 Cloudflare Workers，默认可直接使用 MyMemory；使用其他平台时，在偏好设置中填写自己的凭据。
 
-本地运行 `node scripts/dev-server.mjs`，通过标准输入的一行 JSON 提供服务端密钥（`{"key":"你的服务端密钥"}`），或由受控环境提供 `TRANSLATION_API_KEY`。访问打印的 `http://127.0.0.1:4173`。不要把密钥放进命令行参数、前端代码或交付包。
+本地运行 `node scripts/dev-server.mjs`，可通过标准输入的一行 JSON 提供开发者专用配置（`{"key":"你的服务端密钥","developerToken":"至少24个字符的随机开发者口令"}`），或通过受控环境提供 `TRANSLATION_API_KEY` 与 `LANGPACK_DEVELOPER_TOKEN`。未配置开发者口令时，服务器共享密钥不可调用；用户自备平台密钥不依赖此配置。访问打印的 `http://127.0.0.1:4173`。不要把密钥放进命令行参数、前端代码或交付包。
 
 构建执行 `bash scripts/build.sh`，再执行 `node scripts/validate-artifact.mjs`；生成的 `dist/server/index.js` 内嵌静态界面，但不包含运行时密钥。
 
@@ -19,19 +19,33 @@
 - TXT、Markdown、DOCX 本地解析，段落勾选、编辑、合并与按句拆分。
 - 对齐 MediaServiceClient 的 35 种语言资源：简体中文为源语言，另外 34 种可多选为翻译目标，支持按名称或代码搜索。
 - 最近目标语言组合保存在本地；开始一次新的批量翻译后，下次新建项目或翻译操作默认沿用，仍可增加、减少或更换语言。
-- MyMemory 主服务与 ZTAITrans 自动备用，记录每条译文的实际来源。MyMemory 额度耗尽后，备用重译当前完整原段，并在冷却期处理后续条目。
+- MyMemory、ZTAITrans、DeepL、Azure、Google 五个平台；独立凭据、首选平台和启用顺序，记录实际译文来源。仅额度耗尽或不支持精确目标时，按用户启用的顺序使用备用。
 - 逐条逐语言进度、暂停与恢复、任务记录和只重试失败项。
 - 默认增量翻译：保留当前成功译文，并按同项目完全一致的原文和目标语言复用已有机器译文；重复导入或同批重复文案不再逐条重复请求。
 - 长段落按 480 UTF-8 字节优先按句切分，接口每次最多 500 字节；合并后仍对应原来的一个 key，保留换行及占位符。
 - 串行限速约 1.1 秒 / 请求；单次请求 15 秒超时，临时网络、限流与服务错误最多自动重试两次。
-- MyMemory 日额度耗尽后自动切换备用；备用授权、配置不可用时停止，预算耗尽单独提示。保留成功结果，不把服务商警告当成译文。
+- 各平台额度冷却独立，到期后再次尝试首选；普通限流仅有限重试，鉴权或配置错误停止，不借用其他账户的凭据。保留成功结果，不把服务商警告当成译文。
 - 译文编辑、人工确认、key 唯一性及占位符检查。
 - 独立 JSON 与 ZIP 真实下载，缺失译文阻止正式导出，草稿 ZIP 附校验报告。
 - 导出快照重下载、偏好设置、手机底部导航与电脑工作台布局。
 
+## 平台配置与免费额度
+
+在偏好设置中选择首选及备用顺序，再填写各平台凭据。默认只启用 MyMemory；不会预先启用付费账户或开发者授权。
+
+| 平台 | 凭据与免费条件 |
+| --- | --- |
+| MyMemory | 可匿名；有效联系邮箱提升官方日额度。可选私有词库 key 不代表提升免费额度。[官方规则](https://mymemory.translated.net/doc/usagelimits.php) |
+| Azure Translator | 订阅密钥、资源区域（按资源要求填写）。F0 每订阅月 200 万字符，到限停止；其他层可能计费。[官方说明](https://www.microsoft.com/en-us/translator/business/faq/) |
+| Google Cloud Translation Basic | API key；需要启用结算。NMT 每月前 50 万字符对应抵扣，超出会计费，应在平台控制台设硬配额。[官方价格](https://cloud.google.com/products/translate/pricing?hl=en) |
+| DeepL | API key、按账户控制台选择免费或标准接口。新 API Developer 总计 100 万字符、不重置；既有 API Free 每月 50 万字符但已停止新购，付费套餐另有收费条件。[官方套餐](https://support.deepl.com/hc/en-us/articles/360021200939-DeepL-API-plans) |
+| ZTAITrans | 自备 key/租户，或开发者专用访问口令。未承诺公开免费额度，受租户月预算约束。 |
+
+用户凭据默认仅当前会话，只有明确选择“本机保存”才单独持久化；不进入项目、任务、导出或浏览器项目备份。本机保存不等于加密保险箱，共享设备不宜使用。删除凭据会同时删除会话及本机副本。切换凭据会使平台请求缓存及配额冷却失效；项目里已经成功的译文仍按原来源增量复用。
+
 ## 边界
 
-主服务调用 `https://api.mymemory.translated.net/get`，无需 API key。备用通过同源 `/api/translation/backup` 调用 ZTAITrans，密钥只保存在服务端 `TRANSLATION_API_KEY`，上游地址和 fast 档位固定。仅 MyMemory 的额度耗尽触发自动切换，普通源文或请求错误不会盲目回退。
+MyMemory 匿名/邮箱模式直接请求官方接口；可选私有词库 key 与其他平台一样通过同源 `/api/translation/provider` 转发，不出现在浏览器请求 URL 中。地址、语言映射及模型由服务器固定；Google 固定 NMT，DeepL 免费/标准接口必须显式选择且不会自动升级，ZTAITrans 固定 fast。服务器不保存用户凭据，不返回或记录上游原始错误。旧 `/api/translation/backup` 同样必须通过开发者口令校验，不能绕过新入口继续消耗共享授权。
 
 点击开始翻译会将所选原文发送给相应服务；文档文件本身只在本地解析，不调用公共翻译记忆写入接口。设置中可选填自己的有效联系邮箱，通过 `de` 参数随请求发送。官方匿名额度每天 5,000 字符，提供有效邮箱为每天 50,000 字符，具体以服务商规则为准。
 
@@ -53,7 +67,7 @@ key 继续由本地规则生成，未知文案提供稳定备用 key 并允许�
 
 语言清单对齐 MediaServiceClient 主应用的 `Language-*.json` 资源，包含简体中文源文和以下 34 种目标：繁体中文、英语、巴西葡萄牙语、葡萄牙葡萄牙语、马来语、泰语、法语、西班牙语、阿拉伯语、菲律宾语、越南语、俄语、土耳其语、印度尼西亚语、日语、韩语、德语、印地语、匈牙利语、意大利语、罗马尼亚语、瑞典语、保加利亚语、波兰语、丹麦语、芬兰语、荷兰语、捷克语、斯洛伐克语、乌克兰语、希腊语、书面挪威语、克罗地亚语、僧伽罗语。导出代码沿用对应资源名，例如 `pt-BR` 和 `pt-PT` 分开保存；简体中文直接导出源文，无需调用翻译接口。
 
-MyMemory 使用其支持的语言代码；其官方语言选择列表没有单列巴西葡萄牙语、菲律宾语和书面挪威语，因此这三种直接交由 ZTAITrans 翻译，不用其他地区或近似语言替代。其余语言使用原有主备流程，备用凭据继续仅保存在服务器。MyMemory 语言参数格式见[官方接口说明](https://mymemory.translated.net/doc/spec.php)，可用语言列表见[官方工作台](https://mymemory.translated.net/)。
+MyMemory 没有精确列出巴西葡萄牙语、菲律宾语和书面挪威语，需选择已配置的其他平台。Azure 覆盖全部 34 种；Google NMT 保守排除书面挪威语；DeepL 目录保守排除菲律宾语与僧伽罗语，实际可用性也受账户套餐影响。不会用近似语言或其他地区代码替代，也不会自动借用服务器共享授权。MyMemory 语言参数格式见[官方接口说明](https://mymemory.translated.net/doc/spec.php)，可用语言列表见[官方工作台](https://mymemory.translated.net/)。
 
 最近偏好只在有效的新批量翻译开始时更新，包括全部命中增量复用的任务。只勾选后离开不会覆盖偏好；单条重译、暂停恢复和失败重试不会把上次多选组合缩成单一语言。新项目、新输入 / 导入及新发起的项目翻译默认使用最近组合；校对、导出和重开历史任务保留对应项目或任务的语言快照。旧存档没有最近偏好时继续使用原默认组合，设置中的其他偏好与已有译文不会被清除。
 
@@ -71,16 +85,16 @@ MyMemory 使用其支持的语言代码；其官方语言选择列表没有单�
 
 ## 备用服务限制
 
-ZTAITrans 使用现有授权额度；附件文档没有承诺免费或永久免费。备用客户端最长等待约 10 分钟，服务端固定 fast，不自动升级档位。单段最多 50,000 个字符、请求体 256 KiB；超过限制需在导入预览中拆分。单条响应实测可能把业务 ID 回显为 "1"，仅在原文完全一致时兼容，其他错配继续拒绝。
+ZTAITrans 需要用户自己的 API key（可选 tenantId），或开发者访问口令。开发者口令仅用于服务器认证，站点环境密钥始终不发给浏览器。附件文档明确租户月预算，但未提供具体金额或余额查询，不能当作公开免费服务。备用客户端最长等待约 10 分钟，服务端固定 fast，不自动升级档位。单段最多 50,000 个字符、请求体 256 KiB；超过限制需在导入预览中拆分。单条响应实测可能把业务 ID 回显为 "1"，仅在原文完全一致时兼容，其他错配继续拒绝。
 
-仓库及本地交付包均不包含实际密钥；由托管平台通过服务端秘密环境变量 `TRANSLATION_API_KEY` 注入。
+仓库与发布包不含实际密钥。开发者共享模式仅在服务端同时配置 `TRANSLATION_API_KEY` 和至少 24 字符的 `LANGPACK_DEVELOPER_TOKEN`，且访问口令验证通过后可用；任一缺失均关闭共享调用。用户 BYOK 缺失或失败不会改用环境密钥。
 
 ## Flutter 多端版本
 
 Flutter 工程位于 [`flutter_app/`](flutter_app/README.md)，覆盖 iOS、Android、桌面（Windows / macOS / Linux）与 Web，共用文本输入、文档导入、语言多选、真实翻译、校对与 JSON / ZIP 导出流程。原版 `web/` 和现有服务端代理保留。
 
-使用 Flutter 3.35.7 / Dart 3.9.2，在 `flutter_app/` 执行 `flutter pub get`、`flutter analyze`、`flutter test`。完整 Web 流程先执行 `flutter build web --release`，再到仓库根目录运行 `node scripts/flutter-server.mjs`，打开 `http://127.0.0.1:4180`。原生 App（iOS / Android / Windows / macOS / Linux）本版本默认使用独立站点 `https://langpack-standalone.406859116.workers.dev` 的备用代理，无需填写密钥或自行搭建服务器；已有空配置会自动使用此默认服务。显式自定义的服务器地址仍保留，可在设置中清空以恢复应用默认连接。Flutter Web 使用其部署站点的同源代理；自行部署时，备用密钥仅由运营方通过服务端环境变量 `TRANSLATION_API_KEY` 注入。
+使用 Flutter 3.35.7 / Dart 3.9.2，在 `flutter_app/` 执行 `flutter pub get`、`flutter analyze`、`flutter test`。完整 Web 流程先执行 `flutter build web --release`，再到仓库根目录运行 `node scripts/flutter-server.mjs`，打开 `http://127.0.0.1:4180`。原生 App（iOS / Android / Windows / macOS / Linux）本版本默认使用独立站点 `https://langpack-standalone.406859116.workers.dev` 的平台代理；无需自行搭建服务器，但除 MyMemory 外必须配置自己的平台凭据或开发者访问口令。已有空代理地址仍使用该服务。显式自定义的服务器地址仍保留，可在设置中清空以恢复应用默认连接。Flutter Web 使用其部署站点的同源代理；自行部署时，备用密钥仅由运营方通过服务端环境变量 `TRANSLATION_API_KEY` 注入。
 
 Flutter 各端本地数据与原版浏览器数据分别保存，没有账户或云同步；旧版原文需重新导入。平台启动、调试地址、签名、真实 API 验收和 CI 边界详见 [Flutter 使用说明](flutter_app/README.md)。`.github/workflows/flutter.yml` 提供多平台检查；[此前六平台构建记录](https://github.com/CherryIce/langpack-prototype/actions/runs/40858371621) 已成功，后续改动以对应提交的新检查结果为准。构建成功不代表真机验收或商店发布。
 
-已安装的旧版原生 App 可在设置的“备用翻译服务器”中填写 `https://langpack-standalone.406859116.workers.dev`，或安装包含本次默认地址更新的新版本；无需填写 API 密钥。显式自定义地址不会被自动覆盖。新增语言需要使用包含本次语言白名单更新的服务端版本。公共备用服务额度以部署方配置及服务商授权为准，并不承诺永久免费。
+已安装的旧版原生 App 可在设置的“备用翻译服务器”中填写 `https://langpack-standalone.406859116.workers.dev`，或安装包含本次默认地址更新的新版本。旧版匿名共享备用已关闭，需更新客户端以使用自备凭据或开发者访问口令；已有项目和有效译文仍可复用。显式自定义地址不会被自动覆盖。各平台费用与额度以自己的账户配置为准。

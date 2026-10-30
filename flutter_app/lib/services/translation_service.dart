@@ -8,7 +8,7 @@ import 'package:http/http.dart' as http;
 
 import '../models.dart';
 
-/// Public LangPack proxy; the ZTAITrans credential stays in its hosted runtime.
+/// Fixed LangPack proxy origin. User credentials are supplied only at runtime.
 const defaultBackupServiceOrigin =
     'https://langpack-standalone.406859116.workers.dev';
 
@@ -66,11 +66,13 @@ class TranslationResult {
     required this.provider,
     this.requestCount = 0,
     this.cached = false,
+    this.model,
   });
   final String text;
   final String provider;
   final int requestCount;
   final bool cached;
+  final String? model;
 }
 
 final _placeholder = RegExp(
@@ -276,6 +278,61 @@ class TranslationService {
   DateTime? _circuitUntil;
   final LinkedHashMap<String, String> _cache = LinkedHashMap();
   bool _disposed = false;
+  List<String>? _providerOrder;
+  bool _providerFallback = true;
+  Map<String, Map<String, String>> _credentials = {};
+  int _credentialRevision = 0;
+  final Map<String, DateTime> _providerCooldowns = {};
+  final Map<String, String> _providerModels = {};
+  String? _configuredEmail;
+
+  void resetProviderState(String provider) {
+    _providerCooldowns.remove(provider);
+    if (provider == 'MyMemory') _circuitUntil = null;
+    final keys = _cache.keys
+        .where(
+          (key) =>
+              key.startsWith('provider\u0000$provider\u0000') ||
+              provider == 'MyMemory' && key.startsWith('primary\u0000'),
+        )
+        .toList();
+    for (final key in keys) {
+      _cache.remove(key);
+      _providerModels.remove(key);
+    }
+  }
+
+  void setProviderConfiguration({
+    required List<String> order,
+    required bool fallback,
+    required Map<String, Map<String, String>> credentials,
+    required int revision,
+  }) {
+    final copied = {
+      for (final pair in credentials.entries)
+        pair.key: Map<String, String>.from(pair.value),
+    };
+    for (final provider in translationProviders) {
+      if (jsonEncode(_credentials[provider]) != jsonEncode(copied[provider])) {
+        _providerCooldowns.remove(provider);
+      }
+    }
+    if (_credentialRevision != revision ||
+        jsonEncode(_credentials) != jsonEncode(copied)) {
+      clearCache();
+    }
+    _providerOrder = normalizeProviderOrder(order);
+    _providerFallback = fallback;
+    _credentials = copied;
+    _credentialRevision = revision;
+  }
+
+  bool _supportsProvider(String provider, String locale) => switch (provider) {
+    'MyMemory' => _languageMap.containsKey(locale),
+    'DeepL' => !['fil', 'si'].contains(locale),
+    'Google' => locale != 'nb',
+    _ => true,
+  };
 
   Uri _endpoint(String base, String path) {
     final cleaned = base.trim();
@@ -387,6 +444,7 @@ class TranslationService {
     required CancelToken token,
     required Duration timeout,
     String? body,
+    Map<String, String> headers = const {},
   }) async {
     token.throwIfCancelled();
     if (_disposed) {
@@ -405,6 +463,7 @@ class TranslationService {
       );
       request.followRedirects = false;
       request.headers['Accept'] = 'application/json';
+      request.headers.addAll(headers);
       if (body != null) {
         request.headers['Content-Type'] = 'application/json';
         request.body = body;
@@ -524,19 +583,31 @@ class TranslationService {
             r'^\s*MYMEMORY WARNING\s*:',
             caseSensitive: false,
           ).hasMatch(candidate);
-          if ([true, 'true', 1].contains(body?['quotaFinished']) ||
+          final serviceStatus = int.tryParse('${body?['responseStatus']}');
+          final quotaSignal =
+              [true, 'true', 1].contains(body?['quotaFinished']) ||
               _quotaMessage.hasMatch(details) ||
-              candidateWarning && _quotaMessage.hasMatch(candidate)) {
+              candidateWarning && _quotaMessage.hasMatch(candidate);
+          if ([401, 403].contains(response.statusCode) ||
+              serviceStatus == 401 ||
+              serviceStatus == 403 && !quotaSignal) {
+            throw const TranslationFailure(
+              'PROVIDER_AUTH',
+              'MyMemory 鉴权或访问配置不可用，请检查设置。',
+              fatal: true,
+            );
+          }
+          if (quotaSignal) {
             throw TranslationFailure(
               'QUOTA',
-              'MyMemory 今日免费额度已用尽，正在切换备用翻译。',
+              'MyMemory 今日免费额度已用尽，已保留成功译文。',
               quota: true,
               retryAfter: delay,
             );
           }
           final status = response.statusCode >= 400
               ? response.statusCode
-              : int.tryParse('${body?['responseStatus']}');
+              : serviceStatus;
           if (status != 200) {
             final retryable =
                 status == null ||
@@ -794,6 +865,326 @@ class TranslationService {
     }
   }
 
+  TranslationFailure _providerFailure(
+    http.Response response,
+    Map<String, dynamic>? body,
+    String provider,
+  ) {
+    final code = body?['code'] is String
+        ? body!['code'] as String
+        : 'PROVIDER_REQUEST';
+    final fatal =
+        [401, 403].contains(response.statusCode) ||
+        ['PROVIDER_AUTH', 'PROVIDER_CONFIG'].contains(code) ||
+        body?['fatal'] == true;
+    final quota =
+        !fatal &&
+        (response.statusCode == 402 ||
+            code == 'PROVIDER_QUOTA' ||
+            body?['quota'] == true);
+    final unsupported =
+        !fatal &&
+        (code == 'PROVIDER_UNSUPPORTED' || body?['unsupported'] == true);
+    final retryable =
+        !quota &&
+        !fatal &&
+        !unsupported &&
+        body?['retryable'] != false &&
+        (body?['retryable'] == true ||
+            [429, 502, 503, 504].contains(response.statusCode));
+    return TranslationFailure(
+      fatal
+          ? ([401, 403].contains(response.statusCode)
+                ? 'PROVIDER_AUTH'
+                : 'PROVIDER_CONFIG')
+          : quota
+          ? 'PROVIDER_QUOTA'
+          : unsupported
+          ? 'PROVIDER_UNSUPPORTED'
+          : code,
+      quota
+          ? '$provider 可用额度已用尽，已保存成功译文。'
+          : unsupported
+          ? '$provider 暂不支持这个目标语言。'
+          : fatal
+          ? '$provider 凭据或配置不可用，请在设置中检查。'
+          : response.statusCode == 429
+          ? '$provider 请求过于频繁，请稍后重试。'
+          : '$provider 暂时无法完成翻译，请稍后重试。',
+      quota: quota,
+      fatal: fatal,
+      retryable: retryable,
+      retryAfter: _retryAfter(response, body),
+      provider: provider,
+    );
+  }
+
+  List<String> _proxyChunks(String text, {bool byteLimit = false}) {
+    final result = <String>[];
+    var current = StringBuffer(), length = 0;
+    final pieces = RegExp(
+      r'ZXQ(?:PH|NL)\d+QXZ|.',
+      dotAll: true,
+      unicode: true,
+    ).allMatches(text);
+    for (final piece in pieces) {
+      final token = piece[0]!, count = token.runes.length;
+      if (RegExp(r'^ZXQNL\d+QXZ$').hasMatch(token)) {
+        if (length > 0) result.add(current.toString());
+        result.add(token);
+        current = StringBuffer();
+        length = 0;
+        continue;
+      }
+      final size = byteLimit ? utf8.encode(token).length : count;
+      if (length + size > (byteLimit ? 480 : 4000) && length > 0) {
+        result.add(current.toString());
+        current = StringBuffer();
+        length = 0;
+      }
+      current.write(token);
+      length += size;
+    }
+    if (length > 0) result.add(current.toString());
+    return result;
+  }
+
+  Future<TranslationResult> _proxyProvider(
+    String provider,
+    String source,
+    String locale,
+    String base,
+    _Run run, {
+    String email = '',
+  }) async {
+    final credentials = Map<String, String>.from(
+      _credentials[provider] ?? const {},
+    );
+    if (provider == 'MyMemory' && email.isNotEmpty) {
+      credentials['email'] = email;
+    }
+    final key = credentials['apiKey'] ?? '',
+        token = credentials['developerToken'] ?? '';
+    if (provider == 'ZTAITrans'
+        ? (key.isEmpty == token.isEmpty)
+        : key.isEmpty) {
+      throw TranslationFailure(
+        'PROVIDER_CONFIG',
+        '$provider 尚未配置凭据，请先在设置中填写。',
+        fatal: true,
+        provider: provider,
+      );
+    }
+    if (source.runes.length > 50000) {
+      throw TranslationFailure(
+        'PROVIDER_REQUEST',
+        '单段最多 50,000 字符，请先拆分文案。',
+        provider: provider,
+      );
+    }
+    final endpoint = _endpoint(base, '/api/translation/provider');
+    final whitespace = RegExp(r'^(\s*)([\s\S]*?)(\s*)$').firstMatch(source)!;
+    final protected = _Protected(whitespace[2]!, newlines: true);
+    final chunks = provider == 'ZTAITrans'
+        ? [protected.text]
+        : _proxyChunks(protected.text, byteLimit: provider == 'MyMemory');
+    final output = StringBuffer();
+    String? model;
+    for (final chunk in chunks) {
+      final spaces = RegExp(r'^(\s*)([\s\S]*?)(\s*)$').firstMatch(chunk)!;
+      final core = spaces[2]!;
+      if (core.isEmpty ||
+          core
+              .replaceAll(_marker, '')
+              .replaceAll(RegExp(r'[\p{P}\p{S}\s\d]', unicode: true), '')
+              .isEmpty) {
+        output.write(chunk);
+        continue;
+      }
+      final cacheKey =
+          'provider\u0000$provider\u0000${endpoint.origin}\u0000$locale\u0000$core';
+      var translated = run.bypassCache ? null : _cached(cacheKey);
+      var chunkModel = _providerModels[cacheKey];
+      if (translated == null) {
+        final body = jsonEncode({
+          'provider': provider,
+          'content': core,
+          'locale': locale,
+          'credentials': credentials,
+        });
+        if (utf8.encode(body).length > 256 * 1024) {
+          throw TranslationFailure(
+            'PROVIDER_REQUEST',
+            '请求内容过大，请先拆分段落。',
+            provider: provider,
+          );
+        }
+        for (var attempt = 0; ; attempt++) {
+          try {
+            run.status('$provider · 翻译中');
+            run.requests++;
+            final response = await _send(
+              endpoint,
+              token: run.token,
+              timeout: provider == 'MyMemory' ? primaryTimeout : backupTimeout,
+              body: body,
+            );
+            final payload = _body(response);
+            if (response.statusCode != 200 || payload?['code'] != null) {
+              throw _providerFailure(response, payload, provider);
+            }
+            final raw = payload?['text'];
+            if (raw is! String ||
+                raw.trim().isEmpty ||
+                payload?['provider'] != provider ||
+                RegExp(
+                  r'^\s*(?:MYMEMORY WARNING:|<!doctype html|<html(?:\s|>)|UNAUTHORIZED\s*$|Internal Server Error\s*$)',
+                  caseSensitive: false,
+                ).hasMatch(raw)) {
+              throw TranslationFailure(
+                'PROVIDER_RESPONSE',
+                '$provider 未返回有效译文，现有内容已保留。',
+                provider: provider,
+              );
+            }
+            translated = _normalizeMarkers(
+              raw,
+            ).replaceAll(RegExp(r'\r\n|\r|\n'), ' ').trim();
+            _assertSame(_marker, core, translated);
+            run.token.throwIfCancelled();
+            chunkModel = payload?['model'] is String
+                ? payload!['model'] as String
+                : null;
+            _remember(cacheKey, translated);
+            if (chunkModel != null) _providerModels[cacheKey] = chunkModel;
+            while (_providerModels.length > 500) {
+              _providerModels.remove(_providerModels.keys.first);
+            }
+            break;
+          } on TranslationFailure catch (error) {
+            if (!error.retryable ||
+                error.fatal ||
+                error.quota ||
+                attempt >= 1 ||
+                error.retryAfter > const Duration(minutes: 1)) {
+              rethrow;
+            }
+            await run.token.race(
+              _sleep(
+                error.retryAfter > const Duration(seconds: 1)
+                    ? error.retryAfter
+                    : const Duration(seconds: 1),
+              ),
+            );
+          }
+        }
+      }
+      final text = '${spaces[1]}$translated${spaces[3]}';
+      // Retain the source boundary exactly; do not infer spaces between chunks.
+      output.write(text);
+      model ??= chunkModel;
+    }
+    final text =
+        '${whitespace[1]}${protected.restore(output.toString())}${whitespace[3]}';
+    _assertSame(_placeholder, source, text);
+    return TranslationResult(text: text, provider: provider, model: model);
+  }
+
+  Future<TranslationResult> _configuredTranslation(
+    String source,
+    String locale,
+    String email,
+    String base,
+    _Run run,
+  ) async {
+    if (_configuredEmail != email) {
+      resetProviderState('MyMemory');
+      _configuredEmail = email;
+    }
+    TranslationFailure? last;
+    final order = _providerFallback ? _providerOrder! : _providerOrder!.take(1);
+    for (final provider in order) {
+      run.token.throwIfCancelled();
+      if (!_supportsProvider(provider, locale)) {
+        last = TranslationFailure(
+          'PROVIDER_UNSUPPORTED',
+          '$provider 暂不支持这个目标语言。',
+          provider: provider,
+        );
+        if (_providerFallback) continue;
+        throw last;
+      }
+      final until = _providerCooldowns[provider];
+      if (until != null && until.isAfter(_now())) {
+        last = TranslationFailure(
+          'PROVIDER_QUOTA',
+          '$provider 额度冷却中，稍后会自动恢复尝试。',
+          quota: true,
+          provider: provider,
+          retryAfter: until.difference(_now()),
+        );
+        if (_providerFallback) continue;
+        throw last;
+      }
+      try {
+        final result =
+            provider == 'MyMemory' &&
+                (_credentials['MyMemory']?['apiKey'] ?? '').isEmpty
+            ? TranslationResult(
+                text: await _primary(source, locale, email, run),
+                provider: provider,
+              )
+            : await _proxyProvider(
+                provider,
+                source,
+                locale,
+                base,
+                run,
+                email: email,
+              );
+        return TranslationResult(
+          text: result.text,
+          provider: result.provider,
+          model: result.model,
+          requestCount: run.requests,
+          cached: run.requests == 0,
+        );
+      } on TranslationFailure catch (error) {
+        last = TranslationFailure(
+          error.code,
+          error.message,
+          retryable: error.retryable,
+          quota: error.quota,
+          fatal: error.fatal,
+          retryAfter: error.retryAfter,
+          provider: provider,
+        );
+        if (error.fatal) throw last;
+        if (error.quota) {
+          final cooldown = error.retryAfter > Duration.zero
+              ? error.retryAfter
+              : const Duration(hours: 1);
+          _providerCooldowns[provider] = _now().add(
+            Duration(
+              milliseconds: cooldown.inMilliseconds.clamp(1000, 86400000),
+            ),
+          );
+        }
+        if (_providerFallback &&
+            (error.quota || error.code == 'PROVIDER_UNSUPPORTED')) {
+          continue;
+        }
+        throw last;
+      }
+    }
+    throw last ??
+        const TranslationFailure(
+          'PROVIDER_CONFIG',
+          '请配置至少一个翻译平台。',
+          fatal: true,
+        );
+  }
+
   Future<TranslationResult> translate(
     String source,
     String locale, {
@@ -824,6 +1215,9 @@ class TranslationService {
       );
     }
     final run = _Run(token, onStatus, bypassCache);
+    if (_providerOrder != null) {
+      return _configuredTranslation(source, locale, email, apiBaseUrl, run);
+    }
     var provider = 'MyMemory';
     String text;
     if (!_languageMap.containsKey(locale) ||
@@ -856,12 +1250,19 @@ class TranslationService {
     );
   }
 
-  Future<bool> checkBackup(String apiBaseUrl) async {
+  Future<bool> checkBackup(
+    String apiBaseUrl, {
+    String developerToken = '',
+  }) async {
     final token = CancelToken();
     final response = await _send(
       _endpoint(apiBaseUrl, '/api/translation/status'),
       token: token,
       timeout: primaryTimeout,
+      headers: {
+        if (developerToken.isNotEmpty)
+          'X-LangPack-Developer-Token': developerToken,
+      },
     );
     final body = _body(response);
     if (response.statusCode != 200 || body?['backupConfigured'] is! bool) {
@@ -877,9 +1278,14 @@ class TranslationService {
     return body!['backupConfigured'] as bool;
   }
 
-  void clearCache() => _cache.clear();
+  void clearCache() {
+    _cache.clear();
+    _providerModels.clear();
+  }
+
   void dispose() {
     _disposed = true;
+    _credentials.clear();
     _client.close();
   }
 }

@@ -69,6 +69,49 @@ Future<void> _tap(WidgetTester tester, Finder finder) async {
 
 void main() {
   testWidgets(
+    'provider credentials are masked and session-only on a narrow settings screen',
+    (tester) async {
+      tester.view.physicalSize = const Size(320, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final controller = await _controller();
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(LangPackApp(controller: controller));
+      await tester.pumpAndSettle();
+      await _tap(tester, find.text('设置'));
+      await _tap(tester, find.text('配置 DeepL'));
+      final field = find.byWidgetPredicate(
+        (widget) =>
+            widget is TextField && widget.decoration?.labelText == 'API 密钥',
+      );
+      expect(tester.widget<TextField>(field).obscureText, isTrue);
+      final remember = find.widgetWithText(CheckboxListTile, '在本机保存凭据');
+      expect(tester.widget<CheckboxListTile>(remember).value, isFalse);
+      await tester.enterText(field, 'widget_session_fixture');
+      await _tap(tester, find.widgetWithText(FilledButton, '保存配置'));
+      expect(
+        controller.credentialsFor('DeepL')['apiKey'],
+        'widget_session_fixture',
+      );
+      expect(controller.credentialsSaved('DeepL'), isFalse);
+      expect(find.text('widget_session_fixture'), findsNothing);
+      expect(
+        (await SharedPreferences.getInstance()).getString(
+          AppController.credentialStorageKey,
+        ),
+        isNull,
+      );
+      await _tap(tester, find.byKey(const ValueKey('provider-enable-DeepL')));
+      expect(controller.settings.providerOrder, ['MyMemory', 'DeepL']);
+      await controller.flush();
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    },
+  );
+
+  testWidgets(
     '34 target languages can be searched and selected on a narrow screen',
     (tester) async {
       tester.view.physicalSize = const Size(320, 900);
@@ -161,7 +204,7 @@ void main() {
       controller.pending.complete(false);
       await tester.pumpAndSettle();
       expect(controller.settings.apiBaseUrl, isEmpty);
-      expect(find.text('已选用内置在线服务，无需配置密钥'), findsOneWidget);
+      expect(find.text('开发者服务需访问码授权；自备密钥可独立配置。'), findsOneWidget);
       expect(find.text('当前服务器尚未启用备用翻译'), findsNothing);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
@@ -180,7 +223,7 @@ void main() {
       await tester.pumpWidget(LangPackApp(controller: controller));
       await tester.pumpAndSettle();
       await _tap(tester, find.text('偏好设置'));
-      expect(find.text('已选用内置在线服务，无需配置密钥'), findsOneWidget);
+      expect(find.text('开发者服务需访问码授权；自备密钥可独立配置。'), findsOneWidget);
       expect(find.text(defaultBackupServiceOrigin), findsOneWidget);
       expect(find.text('自定义服务器（可选）'), findsOneWidget);
       expect(find.text('恢复内置在线服务'), findsNothing);

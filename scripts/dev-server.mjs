@@ -15,7 +15,7 @@ const line = process.env.TRANSLATION_API_KEY ? '' : await new Promise(resolveLin
 const settings = line ? JSON.parse(line) : {};
 if (process.stdin.isTTY) execFileSync('stty', ['echo'], { stdio: 'inherit' });
 process.stdin.pause(); process.stdin.unref?.();
-const env = { TRANSLATION_API_KEY: process.env.TRANSLATION_API_KEY || settings.key || '' };
+const env = { TRANSLATION_API_KEY: process.env.TRANSLATION_API_KEY || settings.key || '', LANGPACK_DEVELOPER_TOKEN: process.env.LANGPACK_DEVELOPER_TOKEN || settings.developerToken || '' };
 const root = resolve(new URL('..', import.meta.url).pathname);
 const types = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'application/javascript; charset=utf-8' };
 const assets = {};

@@ -20,6 +20,7 @@ class AppController extends ChangeNotifier {
        _documents = documents ?? DocumentService(),
        _exporter = exporter ?? ExportService();
   static const storageKey = 'langpack_flutter_v1';
+  static const credentialStorageKey = 'langpack_provider_credentials_v1';
   final TranslationService _translator;
   final DocumentService _documents;
   final ExportService _exporter;
@@ -27,6 +28,9 @@ class AppController extends ChangeNotifier {
   final List<Project> projects = [];
   Project? currentProject;
   AppSettings settings = AppSettings();
+  final Map<String, Map<String, String>> _providerCredentials = {};
+  final Set<String> _savedCredentialProviders = {};
+  int _credentialRevision = 0;
   bool loading = true, running = false, paused = false;
   bool _disposed = false, _storageHealthy = true;
   String? error;
@@ -61,11 +65,28 @@ class AppController extends ChangeNotifier {
           Map<String, dynamic>.from(data['settings'] as Map? ?? {}),
         );
       }
+      final storedCredentials = _preferences!.getString(credentialStorageKey);
+      if (storedCredentials != null) {
+        try {
+          final stored = jsonDecode(storedCredentials) as Map;
+          for (final provider in translationProviders) {
+            if (stored[provider] is! Map) continue;
+            _providerCredentials[provider] = _cleanCredentials(
+              provider,
+              Map<String, String>.from(stored[provider] as Map),
+            );
+            _savedCredentialProviders.add(provider);
+          }
+        } catch (_) {
+          error = '已保存的翻译凭据无法读取，请重新配置；项目数据已保留。';
+        }
+      }
     } catch (_) {
       _storageHealthy = false;
       error = '本地数据未能读取，原始存档已保留。请导出当前工作备份。';
     }
     loading = false;
+    _configureTranslator();
     _notify();
   }
 
@@ -325,7 +346,7 @@ class AppController extends ChangeNotifier {
         final value = pair.value;
         if (value.edited ||
             value.status != TranslationStatus.done ||
-            !['MyMemory', 'ZTAITrans'].contains(value.provider) ||
+            !translationProviders.contains(value.provider) ||
             !_boundTo(entry, value) ||
             value.text.trim().isEmpty ||
             !listEquals(
@@ -432,6 +453,7 @@ class AppController extends ChangeNotifier {
       if (!p.locales.contains(code)) p.locales.add(code);
     }
     final work = <_Work>[];
+    _configureTranslator();
     final batchResults = <(String, String), (Entry, int, TranslationResult)>{};
     for (final entry in targetEntries) {
       for (final code in locales) {
@@ -535,6 +557,7 @@ class AppController extends ChangeNotifier {
                   : TranslationResult(
                       text: remembered.text,
                       provider: remembered.provider,
+                      model: remembered.model,
                       cached: true,
                     ));
           if (token.cancelled || generation != _generation) break;
@@ -547,6 +570,7 @@ class AppController extends ChangeNotifier {
               ..reviewed = false
               ..sourceText = item.source
               ..sourceRevision = item.sourceRevision
+              ..model = result.model
               ..error = '';
             value.revision++;
             job.provider = result.provider;
@@ -750,18 +774,140 @@ class AppController extends ChangeNotifier {
       }
     }
     if (running) pauseTranslation();
+    if (settings.email != cleanEmail) {
+      _translator.resetProviderState('MyMemory');
+    }
     settings = AppSettings(
       email: cleanEmail,
       apiBaseUrl: cleanBase,
       includeSource: includeSource,
       recentLocales: settings.recentLocales,
+      providerOrder: settings.providerOrder,
+      providerFallback: settings.providerFallback,
     );
     message = '设置已保存。';
     _changed();
     await flush();
   }
 
-  Future<bool> checkBackup() => _translator.checkBackup(settings.apiBaseUrl);
+  void _configureTranslator() => _translator.setProviderConfiguration(
+    order: settings.providerOrder,
+    fallback: settings.providerFallback,
+    credentials: _providerCredentials,
+    revision: _credentialRevision,
+  );
+
+  Map<String, String> credentialsFor(String provider) =>
+      Map.unmodifiable(_providerCredentials[provider] ?? const {});
+  bool credentialsSaved(String provider) =>
+      _savedCredentialProviders.contains(provider);
+  int get providerCredentialRevision => _credentialRevision;
+
+  Map<String, String> _cleanCredentials(
+    String provider,
+    Map<String, String> values,
+  ) {
+    final fields = switch (provider) {
+      'MyMemory' => ['apiKey'],
+      'ZTAITrans' => ['apiKey', 'tenantId', 'developerToken'],
+      'DeepL' => ['apiKey', 'plan'],
+      'Azure' => ['apiKey', 'region'],
+      'Google' => ['apiKey'],
+      _ => <String>[],
+    };
+    return {
+      for (final key in fields)
+        if ((values[key] ?? '').trim().isNotEmpty) key: values[key]!.trim(),
+    };
+  }
+
+  Future<void> saveProviderOrder(List<String> order, {bool? fallback}) async {
+    if (running) pauseTranslation();
+    final normalized = normalizeProviderOrder(order);
+    settings.providerOrder
+      ..clear()
+      ..addAll(normalized);
+    if (fallback != null) settings.providerFallback = fallback;
+    _configureTranslator();
+    _changed();
+    await flush();
+  }
+
+  Future<void> saveProviderCredentials(
+    String provider,
+    Map<String, String> values, {
+    bool remember = false,
+  }) async {
+    if (!translationProviders.contains(provider)) {
+      throw const FormatException('不支持这个平台的凭据配置。');
+    }
+    final cleaned = _cleanCredentials(provider, values);
+    final key = cleaned['apiKey'] ?? '';
+    final developer = cleaned['developerToken'] ?? '';
+    if (provider == 'ZTAITrans' &&
+        ((key.isEmpty && developer.isEmpty) ||
+            (key.isNotEmpty && developer.isNotEmpty))) {
+      throw const FormatException('请选择自备密钥或开发者访问码中的一种。');
+    }
+    if (!['ZTAITrans', 'MyMemory'].contains(provider) && key.isEmpty) {
+      throw const FormatException('请输入该平台的 API 密钥。');
+    }
+    if (provider == 'DeepL') {
+      cleaned['plan'] = cleaned['plan'] == 'pro' ? 'pro' : 'free';
+    }
+    if (provider == 'ZTAITrans' && developer.isNotEmpty) {
+      cleaned.remove('tenantId');
+    }
+    if (running) pauseTranslation();
+    _providerCredentials[provider] = cleaned;
+    if (remember) {
+      _savedCredentialProviders.add(provider);
+    } else {
+      _savedCredentialProviders.remove(provider);
+    }
+    _credentialRevision++;
+    _configureTranslator();
+    await _persistProviderCredentials();
+    message = remember ? '凭据已保存到本机，可随时清除。' : '凭据仅在本次会话使用。';
+    _notify();
+  }
+
+  Future<void> clearProviderCredentials(String provider) async {
+    if (running) pauseTranslation();
+    _providerCredentials.remove(provider);
+    _savedCredentialProviders.remove(provider);
+    _credentialRevision++;
+    _configureTranslator();
+    await _persistProviderCredentials();
+    message = '该平台的会话及本机凭据已清除。';
+    _notify();
+  }
+
+  Future<void> _persistProviderCredentials() async {
+    final saved = {
+      for (final provider in _savedCredentialProviders)
+        provider: _providerCredentials[provider],
+    };
+    try {
+      final success = saved.isEmpty
+          ? await _preferences?.remove(credentialStorageKey)
+          : await _preferences?.setString(
+              credentialStorageKey,
+              jsonEncode(saved),
+            );
+      if (success != true) throw StateError('credential storage incomplete');
+    } catch (_) {
+      error = '本机凭据未完成保存或清除，旧的本机副本可能仍保留，请重试。';
+      message = '';
+      _notify();
+      throw FormatException(error!);
+    }
+  }
+
+  Future<bool> checkBackup() => _translator.checkBackup(
+    settings.apiBaseUrl,
+    developerToken: _providerCredentials['ZTAITrans']?['developerToken'] ?? '',
+  );
   void clearError() {
     error = null;
     message = '';
@@ -784,6 +930,7 @@ class AppController extends ChangeNotifier {
     unawaited(flush());
     _disposed = true;
     _translator.dispose();
+    _providerCredentials.clear();
     super.dispose();
   }
 }

@@ -1947,7 +1947,7 @@ class _WorkspaceState extends State<_Workspace> {
                 ),
                 const SizedBox(height: 8),
                 const Text(
-                  '巴西葡萄牙语、菲律宾语与书面挪威语使用备用翻译服务。',
+                  'MyMemory 不支持巴西葡萄牙语、菲律宾语和书面挪威语，请为这些语言启用支持它们的平台。',
                   style: TextStyle(fontSize: 11, color: _muted, height: 1.6),
                 ),
                 const SizedBox(height: 16),
@@ -2140,8 +2140,9 @@ class _WorkspaceState extends State<_Workspace> {
                       .toList(),
                 ),
                 const SizedBox(height: 25),
-                const _Notice(
-                  '仅新增或变化且没有可复用译文的原文会发送至翻译服务；同批相同原文与语言合并处理。日额度用尽时自动尝试 ZTAITrans。',
+                _Notice(
+                  '仅新增或变化且没有可复用译文的原文会发送；同批相同内容合并处理。'
+                  '本次${c.settings.providerFallback ? '启用顺序：${c.settings.providerOrder.join(' → ')}；仅额度耗尽或语言不支持时切换。' : '只使用首选平台 ${c.settings.providerOrder.first}，自动备用已关闭。'}',
                   icon: Icons.info_outline,
                 ),
                 const SizedBox(height: 14),
@@ -2338,7 +2339,7 @@ class _WorkspaceState extends State<_Workspace> {
         ],
         const SizedBox(height: 20),
         const _Notice(
-          'MyMemory 额度耗尽后，当前完整段落会交给备用服务重译。授权或预算不足时会停止，避免把错误提示保存为译文。',
+          '额度耗尽或语言不支持时，可按设置尝试后续平台；鉴权或配置错误会停止。成功译文逐条保存，来源会显示在校对页。',
           icon: Icons.shield_outlined,
         ),
       ],
@@ -3493,6 +3494,299 @@ class _WorkspaceState extends State<_Workspace> {
     );
   }
 
+  Widget _providerSettings() => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      DropdownButtonFormField<String>(
+        key: ValueKey('primary-${c.settings.providerOrder.first}'),
+        initialValue: c.settings.providerOrder.first,
+        decoration: const InputDecoration(labelText: '首选翻译平台'),
+        items: translationProviders
+            .map(
+              (provider) =>
+                  DropdownMenuItem(value: provider, child: Text(provider)),
+            )
+            .toList(),
+        onChanged: (provider) {
+          if (provider == null) return;
+          _guard(
+            () => c.saveProviderOrder([
+              provider,
+              ...c.settings.providerOrder.where((value) => value != provider),
+            ]),
+          );
+        },
+      ),
+      SwitchListTile.adaptive(
+        contentPadding: EdgeInsets.zero,
+        title: const Text('启用按顺序备用', style: TextStyle(fontSize: 13)),
+        subtitle: const Text(
+          '仅额度耗尽或语言不支持时切换；鉴权和配置错误会停止。',
+          style: TextStyle(fontSize: 11),
+        ),
+        value: c.settings.providerFallback,
+        onChanged: (value) => _guard(
+          () => c.saveProviderOrder(c.settings.providerOrder, fallback: value),
+        ),
+      ),
+      for (final provider in translationProviders) _providerCard(provider),
+      const SizedBox(height: 12),
+      Row(
+        children: [
+          Expanded(
+            child: Text(
+              _backupConfigured == true
+                  ? '开发者访问码已验证，可使用授权服务'
+                  : '开发者服务需访问码授权；自备密钥可独立配置。',
+              style: const TextStyle(fontSize: 11, color: _muted),
+            ),
+          ),
+          const SizedBox(width: 8),
+          OutlinedButton(
+            onPressed: _checkBackupConnection,
+            child: const Text('检测服务'),
+          ),
+        ],
+      ),
+    ],
+  );
+
+  Widget _providerCard(String provider) {
+    final order = c.settings.providerOrder;
+    final index = order.indexOf(provider);
+    final configured = c.credentialsFor(provider).isNotEmpty;
+    final description = switch (provider) {
+      'MyMemory' => '可匿名使用；联系邮箱与私有词库密钥可选。支持 31 种目标语言；私有词库密钥不代表额度增加。',
+      'ZTAITrans' => '自备 API 密钥或开发者访问码；不再提供匿名共享额度。',
+      'DeepL' =>
+        '请选择控制台对应的 free / pro 接口。新注册 Developer 额度为总计 100 万字符；旧 Free 为每月 50 万，具体以账户为准。',
+      'Azure' => 'F0 层每月 200 万字符，到限停止；其他定价层以账户配置为准。',
+      _ => 'Basic 每月 50 万 NMT 字符抵扣，需启用结算，超额收费；请在账户设置用量限额。',
+    };
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Checkbox(
+                value: index >= 0,
+                key: ValueKey('provider-enable-$provider'),
+                onChanged: (enabled) => _guard(
+                  () => c.saveProviderOrder(
+                    enabled == true
+                        ? [...order, provider]
+                        : order.where((value) => value != provider).toList(),
+                  ),
+                ),
+              ),
+              Expanded(
+                child: Text(
+                  '$provider${index < 0 ? '' : ' · 顺序 ${index + 1}'}',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              if (index > 0)
+                IconButton(
+                  tooltip: '上移 $provider',
+                  icon: const Icon(Icons.arrow_upward, size: 18),
+                  onPressed: () {
+                    final updated = [...order];
+                    updated[index] = updated[index - 1];
+                    updated[index - 1] = provider;
+                    _guard(() => c.saveProviderOrder(updated));
+                  },
+                ),
+            ],
+          ),
+          Text(
+            description,
+            style: const TextStyle(fontSize: 11, color: _muted, height: 1.7),
+          ),
+          ...[
+            const SizedBox(height: 6),
+            Text(
+              configured
+                  ? (c.credentialsSaved(provider)
+                        ? '凭据：•••••• · 已在本机保存'
+                        : '凭据：•••••• · 仅本次会话')
+                  : provider == 'MyMemory'
+                  ? '匿名模式（未配置私有词库密钥）'
+                  : '尚未配置凭据',
+              style: const TextStyle(fontSize: 11, color: _muted),
+            ),
+            Wrap(
+              spacing: 12,
+              children: [
+                TextButton(
+                  onPressed: () => _providerCredentialDialog(provider),
+                  child: Text('配置 $provider'),
+                ),
+                if (configured)
+                  TextButton(
+                    onPressed: () =>
+                        _guard(() => c.clearProviderCredentials(provider)),
+                    child: Text('清除 $provider 凭据'),
+                  ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Future<void> _providerCredentialDialog(String provider) async {
+    final current = c.credentialsFor(provider);
+    final apiKey = TextEditingController(text: current['apiKey'] ?? '');
+    final developerToken = TextEditingController(
+      text: current['developerToken'] ?? '',
+    );
+    final tenant = TextEditingController(text: current['tenantId'] ?? '');
+    final region = TextEditingController(text: current['region'] ?? '');
+    var developer = current.containsKey('developerToken');
+    var remember = c.credentialsSaved(provider), saving = false;
+    var plan = current['plan'] == 'pro' ? 'pro' : 'free';
+    String? error;
+    final route = DialogRoute<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, update) => AlertDialog(
+          title: Text('配置 $provider'),
+          content: SizedBox(
+            width: 420,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (provider == 'ZTAITrans')
+                    SwitchListTile.adaptive(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('开发者访问码模式'),
+                      value: developer,
+                      onChanged: (value) => update(() => developer = value),
+                    ),
+                  TextField(
+                    controller: developer ? developerToken : apiKey,
+                    obscureText: true,
+                    autocorrect: false,
+                    enableSuggestions: false,
+                    decoration: InputDecoration(
+                      labelText: developer
+                          ? '开发者访问码'
+                          : provider == 'MyMemory'
+                          ? '私有词库 API 密钥（可留空匿名）'
+                          : 'API 密钥',
+                    ),
+                  ),
+                  if (provider == 'ZTAITrans' && !developer)
+                    TextField(
+                      controller: tenant,
+                      decoration: const InputDecoration(
+                        labelText: 'Tenant ID（选填）',
+                      ),
+                    ),
+                  if (provider == 'Azure')
+                    TextField(
+                      controller: region,
+                      decoration: const InputDecoration(
+                        labelText: '区域（选填，如 eastasia）',
+                      ),
+                    ),
+                  if (provider == 'DeepL')
+                    DropdownButtonFormField<String>(
+                      initialValue: plan,
+                      isExpanded: true,
+                      decoration: const InputDecoration(labelText: '账户接口'),
+                      items: const [
+                        DropdownMenuItem(
+                          value: 'free',
+                          child: Text('免费接口 · api-free'),
+                        ),
+                        DropdownMenuItem(
+                          value: 'pro',
+                          child: Text('标准接口 · api'),
+                        ),
+                      ],
+                      onChanged: (value) =>
+                          update(() => plan = value ?? 'free'),
+                    ),
+                  const SizedBox(height: 12),
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: remember,
+                    title: const Text('在本机保存凭据'),
+                    subtitle: const Text('默认仅本次会话。本机保存不额外加密；共享设备请保持关闭。'),
+                    onChanged: (value) =>
+                        update(() => remember = value == true),
+                  ),
+                  if (error != null)
+                    Text(
+                      error!,
+                      style: const TextStyle(color: Color(0xFF9B4B39)),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: saving ? null : () => Navigator.pop(dialogContext),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: saving
+                  ? null
+                  : () async {
+                      update(() {
+                        saving = true;
+                        error = null;
+                      });
+                      try {
+                        await c.saveProviderCredentials(
+                          provider,
+                          developer
+                              ? {'developerToken': developerToken.text}
+                              : {
+                                  'apiKey': apiKey.text,
+                                  if (provider == 'ZTAITrans')
+                                    'tenantId': tenant.text,
+                                  if (provider == 'Azure')
+                                    'region': region.text,
+                                  if (provider == 'DeepL') 'plan': plan,
+                                },
+                          remember: remember,
+                        );
+                        if (dialogContext.mounted) Navigator.pop(dialogContext);
+                      } catch (failure) {
+                        if (dialogContext.mounted) {
+                          update(() {
+                            error = failure is FormatException
+                                ? failure.message
+                                : '请检查必填凭据和配置，然后重试。';
+                            saving = false;
+                          });
+                        }
+                      }
+                    },
+              child: const Text('保存配置'),
+            ),
+          ],
+        ),
+      ),
+    );
+    await Navigator.of(context).push(route);
+    await route.completed;
+    for (final controller in [apiKey, developerToken, tenant, region]) {
+      controller.dispose();
+    }
+  }
+
   Widget _settings() => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
@@ -3513,7 +3807,7 @@ class _WorkspaceState extends State<_Workspace> {
               ),
               const SizedBox(height: 18),
               const _Notice(
-                '开始翻译后，选中的原文发送至 MyMemory，额度耗尽时尝试 ZTAITrans。文档文件在本地解析，翻译密钥仅由服务器保管。',
+                '选中的原文仅发送给已启用的平台。MyMemory 无需密钥，其他平台使用你配置的密钥或开发者访问码；凭据默认只在本次会话使用。',
                 icon: Icons.shield_outlined,
               ),
               const SizedBox(height: 23),
@@ -3548,37 +3842,7 @@ class _WorkspaceState extends State<_Workspace> {
               const SizedBox(height: 16),
               const Divider(),
               const SizedBox(height: 14),
-              const Text(
-                '自动备用服务',
-                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 7),
-              const Text(
-                'MyMemory 日额度用尽后自动切换。由在线服务器提供授权，使用者无需填写密钥；可用额度由服务端共享。',
-                style: TextStyle(fontSize: 12, color: _muted, height: 1.8),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      _backupConfigured == true
-                          ? '服务端已配置，翻译时验证授权'
-                          : _backupConfigured == false
-                          ? '当前服务器尚未启用备用翻译'
-                          : !kIsWeb && c.settings.apiBaseUrl.trim().isEmpty
-                          ? '已选用内置在线服务，无需配置密钥'
-                          : '尚未检测服务连接',
-                      style: const TextStyle(fontSize: 11, color: _muted),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  OutlinedButton(
-                    onPressed: _checkBackupConnection,
-                    child: const Text('检测服务'),
-                  ),
-                ],
-              ),
+              _providerSettings(),
             ],
           ),
         ),
@@ -3602,11 +3866,11 @@ class _WorkspaceState extends State<_Workspace> {
                     readOnly: true,
                     keyboardType: TextInputType.url,
                     decoration: InputDecoration(
-                      labelText: '备用翻译服务',
+                      labelText: '翻译代理服务',
                       hintText: kIsWeb ? '使用当前网站的同源服务' : '内置在线服务（无需配置）',
                       helperText: kIsWeb
-                          ? 'Web 使用与应用同源的代理，密钥由服务器保管。'
-                          : '默认使用与在线工作台相同的服务。密钥由服务器保管，可按需切换自定义服务器。',
+                          ? 'Web 使用同源代理转发你配置的凭据，不将凭据写入项目或导出。'
+                          : '默认使用与在线工作台相同的代理。付费平台需自备密钥，可按需切换自定义服务器。',
                       helperMaxLines: 3,
                     ),
                     onFieldSubmitted: (value) => _saveSettings(baseUrl: value),
@@ -3616,11 +3880,12 @@ class _WorkspaceState extends State<_Workspace> {
                     TextButton.icon(
                       onPressed: () async {
                         final base = await _textDialog(
-                          '自定义备用服务器（选填）',
+                          '自定义翻译代理（选填）',
                           c.settings.apiBaseUrl,
                           lines: 1,
                           allowEmpty: true,
-                          helper: '留空使用内置在线服务，无需密钥。自定义地址需为提供翻译代理的 HTTPS 根域名。',
+                          helper:
+                              '留空使用内置在线代理。自定义地址需为提供翻译代理的 HTTPS 根域名；密钥在平台配置中填写。',
                         );
                         if (base != null) {
                           await _saveSettings(baseUrl: base.trim());
@@ -3685,10 +3950,12 @@ class _WorkspaceState extends State<_Workspace> {
   Future<void> _checkBackupConnection() async {
     final generation = ++_backupCheckGeneration;
     final base = c.settings.apiBaseUrl;
+    final credentialRevision = c.providerCredentialRevision;
     bool isCurrent() =>
         mounted &&
         generation == _backupCheckGeneration &&
-        base == c.settings.apiBaseUrl;
+        base == c.settings.apiBaseUrl &&
+        credentialRevision == c.providerCredentialRevision;
     try {
       final result = await c.checkBackup();
       if (isCurrent()) setState(() => _backupConfigured = result);

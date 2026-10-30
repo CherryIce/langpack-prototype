@@ -9,7 +9,17 @@
     // Test-only provider fixture. This file is outside the deployed static directory.
     let recovered = false, calls = 0;
     window.fetch = async function (url, options = {}) {
-      const request = new URL(url);
+      const request = new URL(url, window.location.href);
+      if (request.pathname === '/api/translation/status') return new Response(JSON.stringify({ developerConfigured: true, backupConfigured: options.headers?.['X-LangPack-Developer-Token'] === 'fixture-developer' }));
+      if (request.pathname === '/api/translation/provider') {
+        const body = JSON.parse(options.body);
+        calls++;
+        document.getElementById('fixture-count').textContent = '测试请求数：' + calls;
+        document.getElementById('fixture-log').textContent += JSON.stringify({ provider: body.provider, locale: body.locale, characters: Array.from(body.content).length }) + '\n';
+        if (!recovered && /失败/.test(body.content)) return new Response(JSON.stringify({ provider: body.provider, code: 'PROVIDER_AUTH', fatal: true }), { status: 401 });
+        const tokens = body.content.match(/ZXQ(?:PH|NL)\d+QXZ/g) || [];
+        return new Response(JSON.stringify({ provider: body.provider, text: body.provider + ' fixture translation ' + tokens.join(' ') }));
+      }
       if (request.origin !== 'https://api.mymemory.translated.net') throw new Error('测试环境禁止其他 fetch。');
       if (options.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
       await new Promise((resolve, reject) => {
@@ -28,6 +38,8 @@
     document.addEventListener('click', e => { if (e.target.id === 'fixture-recover') { recovered = true; e.target.textContent = '失败项已恢复'; } });
   </script>
   <script defer src="../web/languages.js"></script>
+  <script defer src="../web/providers.js"></script>
+  <script defer src="../web/provider-settings.js"></script>
   <script defer src="../web/engine.js"></script>
   <script defer src="../web/mymemory.js"></script>
   <script defer src="../web/translation-service.js"></script>
@@ -36,7 +48,7 @@
 </head>
 <body>
   <div id="app"></div><div id="toast" class="toast" role="status"></div><dialog id="modal"></dialog>
-  <div style="position:fixed;top:0;right:0;z-index:300;background:#fff5dc;font-size:10px;padding:4px 8px;display:flex;gap:8px"><span>测试夹具 · 模拟服务返回</span><span id="fixture-count">测试请求数：0</span><button id="fixture-recover">使失败项恢复</button></div>
+  <div style="position:fixed;top:0;right:0;z-index:300;background:#fff5dc;font-size:10px;padding:4px 8px;display:flex;gap:8px"><span>5 平台测试夹具 · 只填虚构凭据 · 开发者测试口令 fixture-developer</span><span id="fixture-count">测试请求数：0</span><button id="fixture-recover">使失败项恢复</button></div>
   <pre id="fixture-log" hidden></pre>
 </body>
 </html>

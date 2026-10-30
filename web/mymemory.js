@@ -18,6 +18,7 @@
     result.code = code;
     result.retryable = !!options?.retryable;
     result.quota = !!options?.quota;
+    result.fatal = !!options?.fatal;
     if (options?.retryAfterMs != null) result.retryAfterMs = options.retryAfterMs;
     if (options?.status != null) result.status = options.status;
     return result;
@@ -109,6 +110,7 @@
     return Number.isFinite(date) ? Math.max(0, date - Date.now()) : 0;
   }
   function friendlyStatus(status, delay) {
+    if (status === 401 || status === 403) return error('REQUEST', 'MyMemory 凭据无效或无权使用，请检查配置。', { fatal: true, status });
     if (status === 429) return error('RATE_LIMIT', 'MyMemory 请求过于频繁，请稍后重试。', { retryable: true, retryAfterMs: delay, status });
     if (status === 408 || status === 425 || status >= 500) return error('SERVICE', 'MyMemory 暂时无法处理请求，稍后可以重试。', { retryable: true, retryAfterMs: delay, status });
     return error('REQUEST', 'MyMemory 拒绝了这条请求，请检查原文和目标语言。', { status });
@@ -123,6 +125,7 @@
     const retryBaseMs = Math.max(0, options.retryBaseMs ?? 1000);
     const maxCacheEntries = Math.min(2000, Math.max(1, options.maxCacheEntries ?? 500));
     const email = String(options.email || '').trim();
+    if (String(options.apiKey || options.key || '').trim()) throw error('CONFIG', 'MyMemory 私有词库凭据需通过本站代理使用。', { fatal: true });
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw error('EMAIL', '请填写有效的联系邮箱，或留空使用匿名额度。');
     const cache = new Map();
     let queue = Promise.resolve(), lastStarted = 0;
@@ -166,12 +169,15 @@
         const details = typeof payload?.responseDetails === 'string' ? payload.responseDetails : '';
         const candidate = typeof payload?.responseData?.translatedText === 'string' ? payload.responseData.translatedText : '';
         const delay = retryAfter(response);
+        const httpStatus = Number(response.status || 200);
+        const serviceStatus = Number(payload?.responseStatus);
+        // Transport authentication and service 401 win over contradictory quota flags.
+        // MyMemory also uses service 403 for genuine quota responses, handled below.
+        if (httpStatus === 401 || httpStatus === 403 || serviceStatus === 401) throw friendlyStatus(httpStatus === 401 || httpStatus === 403 ? httpStatus : serviceStatus, delay);
         // Business translations may mention quotas; only provider-prefixed text is a service warning.
         const quotaWarning = /^\s*MYMEMORY WARNING:/i.test(candidate) && quotaMessage(candidate);
         if ([true, 'true', 1].includes(payload?.quotaFinished) || quotaMessage(details) || quotaWarning) throw error('QUOTA', 'MyMemory 今日免费额度已用尽。已完成的译文已保留，请等待额度恢复后重试。', { quota: true, retryAfterMs: delay, status: 429 });
-        const httpStatus = Number(response.status || 200);
         if (response.ok === false || httpStatus >= 400) throw friendlyStatus(httpStatus, delay);
-        const serviceStatus = Number(payload?.responseStatus);
         if (Number.isFinite(serviceStatus) && serviceStatus !== 200) throw friendlyStatus(serviceStatus, delay);
         if (!payload || !Number.isFinite(serviceStatus)) throw error('RESPONSE', '翻译服务返回了无法识别的结果，请稍后重试。', { retryable: true });
         if (/MYMEMORY WARNING:|NO QUERY SPECIFIED|INVALID LANGPAIR|IS AN INVALID (?:TARGET|SOURCE) LANGUAGE|PLEASE SELECT TWO DISTINCT LANGUAGES/i.test(candidate)) throw error('RESPONSE', '翻译服务返回了错误提示，未将其保存为译文。');

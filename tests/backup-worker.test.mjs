@@ -5,10 +5,11 @@ import { readFile } from 'node:fs/promises';
 const source = await readFile(new URL('../worker/handler.js', import.meta.url), 'utf8');
 const { createHandler } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 const SECRET = 'fixture-private-api-key-never-return';
-const env = { TRANSLATION_API_KEY: SECRET };
+const DEVELOPER = 'fixture-owner-access-token-32-characters';
+const env = { TRANSLATION_API_KEY: SECRET, LANGPACK_DEVELOPER_TOKEN: DEVELOPER };
 const origin = 'https://example.chatgpt.site';
 function request(body = { content: '登录', locale: 'en' }, options = {}) {
-  return new Request(origin + '/api/translation/backup', { method: 'POST', body: typeof body === 'string' ? body : JSON.stringify(body), ...options, headers: { 'Content-Type': 'application/json', Origin: origin, ...options.headers }, signal: options.signal });
+  return new Request(origin + '/api/translation/backup', { method: 'POST', body: typeof body === 'string' ? body : JSON.stringify(body), ...options, headers: { 'Content-Type': 'application/json', Origin: origin, 'X-LangPack-Developer-Token': DEVELOPER, ...options.headers }, signal: options.signal });
 }
 function result(text = 'Log in', extras = {}) { return new Response(JSON.stringify({ targetLanguage: 'English', model: 'fast', items: [{ id: 'segment-1', originalText: '登录', translatedText: text }], ...extras }), { headers: { 'Content-Type': 'application/json' } }); }
 async function payload(response, expectedStatus) {
@@ -22,8 +23,8 @@ async function payload(response, expectedStatus) {
 
 test('status exposes configuration boolean only and unknown routes fall through', async () => {
   const handler = createHandler({ fetchImpl: () => assert.fail('must not call upstream') });
-  assert.deepEqual(await payload(await handler(new Request(origin + '/api/translation/status'), env), 200), { backupConfigured: true, backupProvider: 'ZTAITrans' });
-  assert.deepEqual(await payload(await handler(new Request(origin + '/api/translation/status'), {}), 200), { backupConfigured: false, backupProvider: 'ZTAITrans' });
+  assert.deepEqual(await payload(await handler(new Request(origin + '/api/translation/status'), env), 200), { backupConfigured: false, backupProvider: 'ZTAITrans', developerConfigured: true, developerAccessRequired: true, userCredentialsRequired: true, providers: ['MyMemory', 'ZTAITrans', 'DeepL', 'Azure', 'Google'] });
+  assert.deepEqual(await payload(await handler(new Request(origin + '/api/translation/status'), {}), 200), { backupConfigured: false, backupProvider: 'ZTAITrans', developerConfigured: false, developerAccessRequired: true, userCredentialsRequired: true, providers: ['MyMemory', 'ZTAITrans', 'DeepL', 'Azure', 'Google'] });
   assert.equal(await handler(new Request(origin + '/index.html'), env), null);
 });
 
@@ -82,10 +83,10 @@ test('single-item ID compatibility cannot bypass source, count, language, model 
 
 test('missing key, unsupported methods and content type do not reach upstream', async () => {
   const handler = createHandler({ fetchImpl: () => assert.fail('must not call upstream') });
-  assert.equal((await payload(await handler(request(), {}), 503)).code, 'BACKUP_NOT_CONFIGURED');
+  assert.equal((await payload(await handler(request(), {}), 401)).code, 'PROVIDER_AUTH');
   assert.equal((await payload(await handler(new Request(origin + '/api/translation/backup'), env), 405)).code, 'METHOD_NOT_ALLOWED');
   assert.equal((await payload(await handler(new Request(origin + '/api/translation/status', { method: 'POST' }), env), 405)).code, 'METHOD_NOT_ALLOWED');
-  assert.equal((await payload(await handler(new Request(origin + '/api/translation/backup', { method: 'POST', body: 'text' }), env), 415)).code, 'BACKUP_CONTENT_TYPE');
+  assert.equal((await payload(await handler(new Request(origin + '/api/translation/backup', { method: 'POST', body: 'text', headers: { 'X-LangPack-Developer-Token': DEVELOPER } }), env), 415)).code, 'BACKUP_CONTENT_TYPE');
 });
 
 test('cross-origin, null origin and same-site cross-origin calls are rejected', async () => {
@@ -108,7 +109,7 @@ test('declared, streamed byte limits and Unicode character limits are enforced b
   await payload(await handler(request(undefined, { headers: { 'Content-Length': String(300000) } }), env), 413);
   let cancelled = false;
   const stream = new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array(140000)); controller.enqueue(new Uint8Array(140000)); }, cancel() { cancelled = true; } });
-  const streamed = new Request(origin + '/api/translation/backup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: stream, duplex: 'half' });
+  const streamed = new Request(origin + '/api/translation/backup', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-LangPack-Developer-Token': DEVELOPER }, body: stream, duplex: 'half' });
   await payload(await handler(streamed, env), 413); assert.equal(cancelled, true);
 });
 
@@ -195,10 +196,11 @@ test('network errors and malformed response JSON do not leak upstream exceptions
 });
 
 test('client cancellation aborts upstream and ignores a provider that returns late', async () => {
-  const controller = new AbortController(); let upstreamSignal;
-  const handler = createHandler({ fetchImpl: (_, init) => { upstreamSignal = init.signal; return new Promise(resolve => setTimeout(() => resolve(result()), 20)); } });
+  const controller = new AbortController(); let upstreamSignal, markStarted;
+  const started = new Promise(resolve => { markStarted = resolve; });
+  const handler = createHandler({ fetchImpl: (_, init) => { upstreamSignal = init.signal; markStarted(); return new Promise(resolve => setTimeout(() => resolve(result()), 20)); } });
   const pending = handler(request(undefined, { signal: controller.signal }), env);
-  await new Promise(resolve => setImmediate(resolve)); controller.abort();
+  await started; controller.abort();
   assert.equal((await payload(await pending, 499)).code, 'BACKUP_ABORTED');
   assert.equal(upstreamSignal.aborted, true);
 });

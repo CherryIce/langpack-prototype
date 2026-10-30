@@ -1,5 +1,22 @@
 import 'dart:math';
 
+const translationProviders = [
+  'MyMemory',
+  'ZTAITrans',
+  'DeepL',
+  'Azure',
+  'Google',
+];
+
+List<String> normalizeProviderOrder(Iterable<dynamic> values) {
+  final result = values
+      .whereType<String>()
+      .where(translationProviders.contains)
+      .toSet()
+      .toList();
+  return result.isEmpty ? ['MyMemory'] : result;
+}
+
 const supportedLanguages = <Language>[
   Language('zh-Hant', '繁体中文', '繁體中文', '繁'),
   Language('en', '英语', 'English', 'EN'),
@@ -81,6 +98,7 @@ class TranslationValue {
     this.revision = 0,
     this.sourceText,
     this.sourceRevision,
+    this.model,
   });
   String text;
   String provider;
@@ -91,6 +109,7 @@ class TranslationValue {
   int revision;
   String? sourceText;
   int? sourceRevision;
+  String? model;
   Map<String, dynamic> toJson() => {
     'text': text,
     'provider': provider,
@@ -101,6 +120,7 @@ class TranslationValue {
     'revision': revision,
     'sourceText': sourceText,
     'sourceRevision': sourceRevision,
+    if (model != null) 'model': model,
   };
   factory TranslationValue.fromJson(Map<String, dynamic> data) {
     var status = TranslationStatus.values.firstWhere(
@@ -120,6 +140,7 @@ class TranslationValue {
       revision: data['revision'] as int? ?? 0,
       sourceText: data['sourceText'] as String?,
       sourceRevision: data['sourceRevision'] as int?,
+      model: data['model'] as String?,
     );
   }
 }
@@ -365,16 +386,23 @@ class AppSettings {
     this.apiBaseUrl = const String.fromEnvironment('API_BASE_URL'),
     this.includeSource = true,
     Iterable<dynamic> recentLocales = const [],
-  }) : recentLocales = normalizeTargetLocales(recentLocales);
+    Iterable<dynamic> providerOrder = const ['MyMemory'],
+    this.providerFallback = true,
+  }) : recentLocales = normalizeTargetLocales(recentLocales),
+       providerOrder = normalizeProviderOrder(providerOrder);
   String email;
   String apiBaseUrl;
   bool includeSource;
   final List<String> recentLocales;
+  final List<String> providerOrder;
+  bool providerFallback;
   Map<String, dynamic> toJson() => {
     'email': email,
     'apiBaseUrl': apiBaseUrl,
     'includeSource': includeSource,
     'recentLocales': normalizeTargetLocales(recentLocales),
+    'providerOrder': normalizeProviderOrder(providerOrder),
+    'providerFallback': providerFallback,
   };
   factory AppSettings.fromJson(Map<String, dynamic> data) => AppSettings(
     email: data['email'] as String? ?? '',
@@ -385,6 +413,10 @@ class AppSettings {
     recentLocales: data['recentLocales'] is List
         ? data['recentLocales'] as List
         : const [],
+    providerOrder: data['providerOrder'] is List
+        ? data['providerOrder'] as List
+        : const ['MyMemory'],
+    providerFallback: data['providerFallback'] != false,
   );
 }
 

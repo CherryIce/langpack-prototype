@@ -37,7 +37,7 @@ const server = http.createServer(async (req, res) => {
       }
       const request = new Request(url, { method: req.method, headers: req.headers, signal: controller.signal,
         ...(!['GET', 'HEAD'].includes(req.method) ? { body: Buffer.concat(chunks) } : {}) });
-      const response = await handler(request, { TRANSLATION_API_KEY: process.env.TRANSLATION_API_KEY || '' });
+      const response = await handler(request, { TRANSLATION_API_KEY: process.env.TRANSLATION_API_KEY || '', LANGPACK_DEVELOPER_TOKEN: process.env.LANGPACK_DEVELOPER_TOKEN || '' });
       if (!response) { res.writeHead(404); res.end('Not found'); return; }
       res.writeHead(response.status, Object.fromEntries(response.headers));
       res.end(Buffer.from(await response.arrayBuffer()));

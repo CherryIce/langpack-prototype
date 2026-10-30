@@ -50,12 +50,33 @@ void main() {
     'LIVE_OUTPUT_DIR',
     defaultValue: '../outputs/flutter-live',
   );
+  final key = Platform.environment['LANGPACK_ZTAI_API_KEY'] ?? '';
+  final developer = Platform.environment['LANGPACK_DEVELOPER_TOKEN'] ?? '';
+  final hasCredentials = key.isNotEmpty || developer.isNotEmpty;
+  void configure(TranslationService service) =>
+      service.setProviderConfiguration(
+        order: ['MyMemory', if (hasCredentials) 'ZTAITrans'],
+        fallback: true,
+        revision: 1,
+        credentials: {
+          if (hasCredentials)
+            'ZTAITrans': developer.isNotEmpty
+                ? {'developerToken': developer}
+                : {'apiKey': key},
+        },
+      );
   test(
-    'native built-in public proxy works without any client credential or base URL',
+    'native default proxy accepts explicitly provided ZTAI credentials',
     () async {
       final service = TranslationService(client: _QuotaPrimary());
+      configure(service);
       addTearDown(service.dispose);
-      expect(await service.checkBackup(''), isTrue);
+      if (developer.isNotEmpty) {
+        expect(
+          await service.checkBackup('', developerToken: developer),
+          isTrue,
+        );
+      }
       final result = await service.translate('登录', 'en', token: CancelToken());
       expect(result.provider, 'ZTAITrans');
       expect(result.text.trim(), isNotEmpty);
@@ -64,7 +85,7 @@ void main() {
         jsonEncode({
           'origin': defaultBackupServiceOrigin,
           'configuredBaseUrl': '',
-          'clientCredential': false,
+          'clientCredential': true,
           'quotaTrigger': 'simulated primary quota',
           'translation': 'real public ZTAITrans proxy',
           'text': result.text,
@@ -73,15 +94,15 @@ void main() {
         }),
       );
     },
-    skip: !runPublicProxy,
+    skip: !runPublicProxy || !hasCredentials,
     timeout: const Timeout(Duration(minutes: 12)),
   );
   test(
     'real text translation through primary and configured backup',
     () async {
       final service = TranslationService();
+      configure(service);
       addTearDown(service.dispose);
-      expect(await service.checkBackup(base), isTrue);
       final result = await service.translate(
         '登录',
         'en',
@@ -111,6 +132,7 @@ void main() {
     () async {
       final client = _QuotaPrimary();
       final service = TranslationService(client: client);
+      configure(service);
       addTearDown(service.dispose);
       final long =
           '${List.filled(9, '翻译完成后，请仔细检查每一种语言的表达和格式。').join()}\n欢迎 {name}，您有 %d 条消息。';
@@ -183,7 +205,7 @@ void main() {
         }),
       );
     },
-    skip: !run,
+    skip: !run || !hasCredentials,
     timeout: const Timeout(Duration(minutes: 20)),
   );
 }

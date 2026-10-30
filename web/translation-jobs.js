@@ -2,7 +2,8 @@
   'use strict';
 
   const running = new WeakMap();
-  const providerOf = value => ['MyMemory', 'ZTAITrans'].includes(value) ? value : null;
+  const providers = root.LangPackProviders || (typeof module === 'object' && module.exports ? require('./providers.js') : null);
+  const providerOf = value => providers.known(value) ? value : null;
   const textOf = value => value && typeof value === 'object' ? String(value.text ?? '') : String(value ?? '');
   const versionOf = entry => entry.sourceVersion ?? 1;
   const revisionOf = (entry, locale) => entry.translationRevision?.[locale] ?? 0;
@@ -77,7 +78,7 @@
     const targets = [...new Set(locales || [])];
     const job = {
       id, projectId, projectName, entries: active, locales: targets,
-      provider: ['TranslationChain', 'MyMemory', 'ZTAITrans'].includes(provider) ? provider : 'TranslationChain', count: active.length, status: 'pending',
+      provider: provider === 'TranslationChain' || providers.known(provider) ? provider : 'TranslationChain', count: active.length, status: 'pending',
       createdAt: createdAt || now(), activeItem: null,
       plan: plan({ entries: active, locales: targets, memoryEntries }),
       items: targets.flatMap(locale => active.map(entry => {

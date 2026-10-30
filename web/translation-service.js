@@ -1,10 +1,10 @@
 /* Browser translation chain. The authenticated backup key is held by the server only. */
 (function (root, factory) {
   'use strict';
-  const api = factory(root.LangPackLanguages || (typeof module === 'object' && module.exports ? require('./languages.js') : null));
+  const api = factory(root.LangPackLanguages || (typeof module === 'object' && module.exports ? require('./languages.js') : null), root.LangPackProviders || (typeof module === 'object' && module.exports ? require('./providers.js') : null));
   root.TranslationService = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
-})(typeof window !== 'undefined' ? window : globalThis, function (languages) {
+})(typeof window !== 'undefined' ? window : globalThis, function (languages, providers) {
   'use strict';
   const PROVIDER = 'ZTAITrans';
   const placeholderPattern = () => /\{\{\s*[\w.]+\s*\}\}|\{[\w.]+\}|%(?:\d+\$)?[-+#0 ']*(?:\d+|\*)?(?:\.(?:\d+|\*))?[sdif@uoxXegGc]|%%/g;
@@ -217,5 +217,143 @@
     }
     return Object.freeze({ translate });
   }
-  return Object.freeze({ createBackupClient, createClient });
+  function providerFailure(provider, code, message, extra = {}) { return Object.assign(failure(code, message, extra), { provider }); }
+  function remoteProviderFailure(provider, status, payload, response) {
+    const rawCode = typeof payload?.code === 'string' ? payload.code : '';
+    const messages = {
+      PROVIDER_QUOTA: '这个平台的额度已用尽，已完成的译文会保留。', PROVIDER_UNSUPPORTED: '这个平台不支持所选目标语言。',
+      PROVIDER_AUTH: '这个平台的凭据无效或无权使用，请检查配置。', PROVIDER_CONFIG: '请先配置这个平台的有效凭据。',
+      PROVIDER_RATE_LIMIT: '这个平台请求过于频繁，请稍后重试。', PROVIDER_REQUEST: '这个平台拒绝了请求，请检查配置和内容。',
+      PROVIDER_RESPONSE: '这个平台返回的结果无效，未保存为译文。', PROVIDER_SERVICE: '这个平台暂时无法提供翻译，请稍后重试。',
+      PROVIDER_TIMEOUT: '这个平台翻译超时，已完成的结果会保留。', PROVIDER_ABORTED: '翻译已暂停。'
+    };
+    const code = Object.hasOwn(messages, rawCode) ? rawCode : status === 401 || status === 403 ? 'PROVIDER_AUTH' : status === 429 ? 'PROVIDER_RATE_LIMIT' : status >= 500 ? 'PROVIDER_SERVICE' : status >= 400 ? 'PROVIDER_REQUEST' : 'PROVIDER_RESPONSE';
+    const fatal = status === 401 || status === 403 || ['PROVIDER_AUTH', 'PROVIDER_CONFIG'].includes(code);
+    const quota = !fatal && code === 'PROVIDER_QUOTA';
+    const unsupported = !fatal && code === 'PROVIDER_UNSUPPORTED';
+    const retryable = !fatal && !quota && !unsupported && payload?.retryable !== false && ['PROVIDER_RATE_LIMIT', 'PROVIDER_SERVICE', 'PROVIDER_TIMEOUT'].includes(code);
+    return providerFailure(provider, code === 'PROVIDER_ABORTED' ? 'ABORTED' : code, messages[code] || '翻译请求失败，现有内容已保留。', { fatal, quota, unsupported, retryable, retryAfterMs: Math.max(retryAfter(response), Number.isFinite(payload?.retryAfterMs) ? Math.max(0, payload.retryAfterMs) : 0) });
+  }
+  function splitProviderText(value, maximum = 4000, utf8 = false) {
+    const units = String(value).match(/ZXQ(?:PH|NL)\d+QXZ|[\s\S]/gu) || [];
+    const encoder = utf8 ? new TextEncoder() : null;
+    const size = unit => encoder ? encoder.encode(unit).length : Array.from(unit).length;
+    const chunks = []; let start = 0;
+    while (start < units.length) {
+      let cursor = start, count = 0, boundary = -1;
+      while (cursor < units.length && count + size(units[cursor]) <= maximum) {
+        count += size(units[cursor]);
+        if (/[。！？.!?；;，,\s]$/u.test(units[cursor])) boundary = cursor + 1;
+        cursor++;
+      }
+      if (cursor === start) throw failure('PROVIDER_REQUEST', '受保护标记过长，无法安全拆分。');
+      const end = cursor < units.length && boundary > start ? boundary : cursor;
+      chunks.push(units.slice(start, end).join('')); start = end;
+    }
+    return chunks;
+  }
+  function createProviderClient({ provider, getCredentials = () => ({}), getRevision = () => 0, fetchImpl = (...args) => fetch(...args), sleep: sleepImpl = sleep, maxRetries = 1, timeoutMs = provider === 'ZTAITrans' ? 620000 : 65000, maxCacheEntries = 256 } = {}) {
+    if (!providers.known(provider)) throw new TypeError('请选择已支持的翻译平台。');
+    const cache = new Map();
+    const remember = (key, text) => { cache.delete(key); cache.set(key, text); while (cache.size > Math.max(1, maxCacheEntries)) cache.delete(cache.keys().next().value); };
+    async function translate(value, locale, options = {}) {
+      const source = String(value ?? ''); checkAbort(options.signal);
+      if (!languages.targets.some(language => language.code === locale)) throw providerFailure(provider, 'PROVIDER_UNSUPPORTED', '不支持这个目标语言。', { unsupported: true });
+      const credentials = providers.cleanCredentials(provider, getCredentials());
+      if (!providers.configured(provider, credentials) || provider === 'MyMemory' && !credentials.apiKey) throw providerFailure(provider, 'PROVIDER_CONFIG', '请先在设置中填写这个平台的凭据。', { fatal: true });
+      const revision = getRevision(); let requestCount = 0;
+      const ensureCurrent = () => { checkAbort(options.signal); if (getRevision() !== revision) throw providerFailure(provider, 'PROVIDER_CONFIG', '平台配置已改变，请重新开始或继续任务。', { fatal: true }); };
+      async function request(content, cacheScope) {
+        ensureCurrent();
+        const key = JSON.stringify([provider, revision, locale, cacheScope, content]);
+        if (!options.bypassCache && cache.has(key)) { const text = cache.get(key); remember(key, text); return text; }
+        for (let attempt = 0; ; attempt++) {
+          ensureCurrent(); const controller = new AbortController(); let timedOut = false;
+          const onAbort = () => controller.abort(); options.signal?.addEventListener('abort', onAbort, { once: true });
+          const timer = setTimeout(() => { timedOut = true; controller.abort(); }, Math.max(1, timeoutMs));
+          try {
+            const body = JSON.stringify({ provider, content, locale, credentials });
+            if (new TextEncoder().encode(body).length > 256 * 1024) throw providerFailure(provider, 'PROVIDER_REQUEST', '翻译请求过大，请拆分原文。');
+            requestCount++;
+            const response = await withAbort(fetchImpl('/api/translation/provider', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store', referrerPolicy: 'no-referrer', body, signal: controller.signal }), controller.signal);
+            let payload; try { payload = await withAbort(response.json(), controller.signal); } catch (cause) { if (controller.signal.aborted) throw cause; payload = null; }
+            const status = Number(response.status || 200);
+            if (response.ok === false || status >= 400 || payload?.code) throw remoteProviderFailure(provider, status, payload, response);
+            if (payload?.provider !== provider || typeof payload?.text !== 'string' || !payload.text.trim() || /^\s*(?:MYMEMORY WARNING:|<!doctype|<html|UNAUTHORIZED\s*$)/i.test(payload.text) || [credentials.apiKey, credentials.developerToken].some(secret => secret && payload.text.includes(secret))) throw providerFailure(provider, 'PROVIDER_RESPONSE', '平台未返回有效译文，原有内容已保留。');
+            const text = normalizeMarkers(payload.text).replace(/\r\n|\r|\n/g, ' ');
+            if (JSON.stringify(markers(content)) !== JSON.stringify(markers(text))) throw providerFailure(provider, 'PLACEHOLDER', '翻译改变了占位符或换行标记，结果未保存。');
+            ensureCurrent(); remember(key, text); return text;
+          } catch (cause) {
+            ensureCurrent();
+            const error = timedOut ? providerFailure(provider, 'PROVIDER_TIMEOUT', '翻译请求超时，已完成结果会保留。', { retryable: true }) : cause?.name === 'TranslationError' || cause?.name === 'AbortError' ? cause : providerFailure(provider, 'PROVIDER_SERVICE', '无法连接翻译服务，请检查网络。', { retryable: true });
+            if (isAbort(error) || !error.retryable || error.fatal || error.quota || attempt >= Math.min(2, Math.max(0, maxRetries)) || error.retryAfterMs > 60000) throw error;
+            const delayMs = Math.max(error.retryAfterMs || 0, 1000 * 2 ** attempt);
+            notify(options.onRetry, { provider, attempt: attempt + 1, delayMs, code: error.code });
+            await withAbort(sleepImpl(delayMs, options.signal), options.signal);
+          } finally { clearTimeout(timer); options.signal?.removeEventListener('abort', onAbort); }
+        }
+      }
+      if (!source.trim()) return { text: source, provider, cached: true, requestCount: 0 };
+      if (provider === 'ZTAITrans') {
+        const [, prefix, core, suffix] = source.match(/^(\s*)([\s\S]*?)(\s*)$/u), protectedSource = protect(core);
+        notify(options.onProgress, { provider, completed: 0, total: 1, requestCount });
+        const text = prefix + restore(core, protectedSource, await request(protectedSource.text, source)) + suffix;
+        ensureCurrent(); notify(options.onProgress, { provider, completed: 1, total: 1, requestCount });
+        return { text, provider, requestCount, cached: requestCount === 0 };
+      }
+      const parts = [];
+      for (const line of source.split(/(\r\n|\r|\n)/)) {
+        if (!line.trim()) { parts.push({ literal: line }); continue; }
+        const [, prefix, core, suffix] = line.match(/^(\s*)([\s\S]*?)(\s*)$/u), protectedSource = protect(core);
+        parts.push({ prefix, suffix, core, protectedSource, chunks: splitProviderText(protectedSource.text, provider === 'MyMemory' ? 480 : 4000, provider === 'MyMemory') });
+      }
+      const total = parts.reduce((sum, part) => sum + (part.chunks?.length || 0), 0); let completed = 0, output = '';
+      notify(options.onProgress, { provider, completed, total, requestCount });
+      for (const part of parts) {
+        if (part.literal !== undefined) { output += part.literal; continue; }
+        let line = '';
+        for (let index = 0; index < part.chunks.length; index++) {
+          const chunk = part.chunks[index], [, prefix, core, suffix] = chunk.match(/^(\s*)([\s\S]*?)(\s*)$/u);
+          const literal = !core.replace(/ZXQ(?:PH|NL)\d+QXZ/g, '').replace(/[\p{P}\p{S}\s\d]/gu, '');
+          const text = literal ? chunk : prefix + await request(core, '') + suffix;
+          line += text; completed++;
+          notify(options.onProgress, { provider, completed, total, requestCount });
+        }
+        output += part.prefix + restore(part.core, part.protectedSource, line) + part.suffix;
+      }
+      ensureCurrent();
+      return { text: output, provider, requestCount, cached: requestCount === 0 };
+    }
+    return Object.freeze({ translate, clearCache: () => cache.clear() });
+  }
+  function createOrderedClient({ order = ['MyMemory'], fallback = true, clients = {}, circuits = {}, now = Date.now, onFallback } = {}) {
+    const selected = providers.normalizeOrder(order);
+    async function translate(source, locale, options = {}) {
+      checkAbort(options.signal);
+      if (!languages.targets.some(language => language.code === locale)) throw failure('PROVIDER_UNSUPPORTED', '不支持这个目标语言。', { unsupported: true });
+      let lastError, previous;
+      for (const provider of (fallback ? selected : selected.slice(0, 1))) {
+        checkAbort(options.signal);
+        if (!providers.supports(provider, locale)) { lastError = providerFailure(provider, 'PROVIDER_UNSUPPORTED', '这个平台不支持所选目标语言。', { unsupported: true }); previous = { from: provider, reason: 'unsupported' }; continue; }
+        const circuit = circuits[provider] ||= { until: 0 };
+        if (Number(circuit.until) > now()) { lastError = providerFailure(provider, 'PROVIDER_QUOTA', '这个平台的额度尚未恢复。', { quota: true, retryAfterMs: circuit.until - now() }); previous = { from: provider, reason: 'quota', until: circuit.until }; continue; }
+        if (!clients[provider]?.translate) throw providerFailure(provider, 'PROVIDER_CONFIG', '请先配置所选平台。', { fatal: true });
+        if (previous) notify(onFallback, { ...previous, to: provider });
+        try {
+          const result = await clients[provider].translate(source, locale, { ...options, onProgress: value => notify(options.onProgress, { ...value, provider }), onRetry: value => notify(options.onRetry, { ...value, provider }) });
+          checkAbort(options.signal);
+          if (result?.provider !== provider) throw providerFailure(provider, 'PROVIDER_RESPONSE', '翻译平台来源不匹配，结果未保存。');
+          return result;
+        } catch (error) {
+          checkAbort(options.signal); if (isAbort(error) || error.fatal || !(error.quota || error.unsupported)) throw providerError(error, provider);
+          lastError = providerError(error, provider);
+          if (error.quota) { circuit.until = now() + Math.min(86400000, Math.max(1000, error.retryAfterMs > 0 ? error.retryAfterMs : 3600000)); previous = { from: provider, reason: 'quota', until: circuit.until }; }
+          else previous = { from: provider, reason: 'unsupported' };
+        }
+      }
+      throw lastError || providerFailure(selected[0] || 'MyMemory', 'PROVIDER_CONFIG', '请先选择翻译平台。', { fatal: true });
+    }
+    return Object.freeze({ translate });
+  }
+  return Object.freeze({ createBackupClient, createClient, createProviderClient, createOrderedClient, splitProviderText });
 });

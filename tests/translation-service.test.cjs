@@ -245,3 +245,40 @@ test('provider-tagged retry callbacks and options reach the actual selected prov
   assert.equal((await client.translate('测试', 'en', { bypassCache: true, onRetry: event => seen.push(event) })).provider, 'ZTAITrans');
   assert.deepEqual(seen, [{ attempt: 1, provider: 'ZTAITrans' }]);
 });
+
+test('all 34 canonical target codes reach backup distinctly while source and unknown languages are rejected', async () => {
+  const Languages = require('../web/languages.js');
+  const codes = [];
+  const client = createBackupClient({ fetchImpl: async (_, options) => { codes.push(JSON.parse(options.body).locale); return reply('translated'); } });
+  for (const language of Languages.targets) await client.translate('登录', language.code);
+  assert.deepEqual(codes, Languages.targets.map(language => language.code));
+  for (const locale of ['zh-Hans', 'tl-PH', 'no', 'sl', 'xx']) await assert.rejects(client.translate('登录', locale), { code: 'LANGUAGE' });
+  assert.equal(codes.length, 34);
+});
+
+test('unsupported exact primary variants route directly to backup without quota circuit changes or fallback notices', async () => {
+  const circuit = { until: 0 };
+  const calls = [];
+  let notices = 0;
+  const client = createClient({
+    circuit, onFallback() { notices++; },
+    primary: { async translate(source, locale) { calls.push(['primary', locale]); return { text: 'primary', provider: 'MyMemory' }; } },
+    backup: { async translate(source, locale, options) { calls.push(['backup', locale]); options.onProgress?.({ completed: 1, total: 1 }); return { text: locale, provider: 'ZTAITrans' }; } }
+  });
+  for (const locale of ['pt-BR', 'fil', 'nb']) {
+    const seen = [];
+    const result = await client.translate('登录', locale, { onProgress(value) { seen.push(value.provider); } });
+    assert.equal(result.provider, 'ZTAITrans'); assert.deepEqual(seen, ['ZTAITrans']);
+  }
+  await client.translate('登录', 'pt-PT');
+  assert.deepEqual(calls, [['backup', 'pt-BR'], ['backup', 'fil'], ['backup', 'nb'], ['primary', 'pt-PT']]);
+  assert.equal(circuit.until, 0); assert.equal(notices, 0);
+});
+
+test('backup-only variant failure retains the exact provider error and does not fall back to an approximate primary language', async () => {
+  let calls = 0;
+  const circuit = { until: 0 };
+  const client = createClient({ circuit, primary: { async translate() { assert.fail('An approximate language must never be requested'); } }, backup: { async translate(source, locale) { calls++; assert.equal(locale, 'fil'); throw fail('BACKUP_NOT_CONFIGURED', { fatal: true }); } } });
+  await assert.rejects(client.translate('登录', 'fil'), { code: 'BACKUP_NOT_CONFIGURED', provider: 'ZTAITrans', fatal: true });
+  assert.equal(calls, 1); assert.equal(circuit.until, 0);
+});

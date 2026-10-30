@@ -36,6 +36,9 @@ class AppController extends ChangeNotifier {
   String? activeProjectId;
   CancelToken? _token;
   TaskRecord? _activeJob;
+  final Map<String, TaskRecord> _lastBatchJobs = {};
+  String? _batchProjectId;
+  List<String>? _batchLocales;
   int _generation = 0;
   Timer? _saveTimer;
   Future<void> _saveQueue = Future.value();
@@ -103,7 +106,13 @@ class AppController extends ChangeNotifier {
 
   Project createProject(String name, {String description = ''}) {
     if (name.trim().isEmpty) throw ArgumentError('请输入项目名称。');
-    final p = Project(name: name.trim(), description: description.trim());
+    final p = Project(
+      name: name.trim(),
+      description: description.trim(),
+      locales: settings.recentLocales.isEmpty
+          ? null
+          : [...settings.recentLocales],
+    );
     projects.insert(0, p);
     currentProject = p;
     _changed();
@@ -112,6 +121,8 @@ class AppController extends ChangeNotifier {
 
   void openProject(String id) {
     currentProject = projects.firstWhere((p) => p.id == id);
+    _batchProjectId = null;
+    _batchLocales = null;
     error = null;
     _notify();
   }
@@ -122,6 +133,7 @@ class AppController extends ChangeNotifier {
   }
 
   void deleteProject(String id) {
+    _lastBatchJobs.remove(id);
     if (activeProjectId == id) {
       pauseTranslation();
       activeProjectId = null;
@@ -149,12 +161,34 @@ class AppController extends ChangeNotifier {
     if (running && activeProjectId == currentProject!.id) pauseTranslation();
     currentProject!.locales
       ..clear()
-      ..addAll(
-        codes
-            .where((code) => supportedLanguages.any((l) => l.code == code))
-            .toSet(),
-      );
+      ..addAll(normalizeTargetLocales(codes));
+    _batchProjectId = null;
+    _batchLocales = null;
     _changed();
+  }
+
+  List<String> get batchLocales =>
+      _batchProjectId == currentProject?.id && _batchLocales != null
+      ? List.unmodifiable(_batchLocales!)
+      : List.unmodifiable(currentProject?.locales ?? <String>[]);
+
+  List<String> get activeBatchLocales =>
+      activeProjectId == currentProject?.id &&
+          _activeJob?.locales.isNotEmpty == true
+      ? List.unmodifiable(_activeJob!.locales)
+      : List.unmodifiable(currentProject?.locales ?? <String>[]);
+
+  void setBatchLocales(List<String> codes) {
+    if (currentProject == null || running) return;
+    _batchProjectId = currentProject!.id;
+    _batchLocales = normalizeTargetLocales(codes);
+    _notify();
+  }
+
+  void applyRecentLocales() {
+    final recent = normalizeTargetLocales(settings.recentLocales);
+    if (currentProject == null) return;
+    setBatchLocales(recent.isEmpty ? currentProject!.locales : recent);
   }
 
   List<DocumentBlock> splitText(String text, {String mode = 'paragraph'}) =>
@@ -319,7 +353,7 @@ class AppController extends ChangeNotifier {
     final unique = <(String, String)>{};
     var retained = 0, reusable = 0, pending = 0;
     for (final entry in p.selectedEntries) {
-      for (final code in p.locales) {
+      for (final code in batchLocales) {
         final value = entry.translations[code];
         if (value != null && _retained(entry, value)) {
           retained++;
@@ -341,22 +375,65 @@ class AppController extends ChangeNotifier {
 
   Future<void> startTranslation({
     bool retryFailedOnly = false,
+    bool resume = false,
     String? entryId,
     String? locale,
     bool overwrite = false,
   }) async {
     final p = currentProject;
     if (p == null || running) return;
-    final locales = locale == null ? p.locales : [locale];
-    if (locales.isEmpty || p.selectedEntries.isEmpty) {
+    final isContinuation = retryFailedOnly || resume;
+    final savedBatch =
+        _lastBatchJobs[p.id] ?? p.jobs.where((job) => job.batch).firstOrNull;
+    final continuationLocales = savedBatch?.locales.isNotEmpty == true
+        ? savedBatch!.locales
+        : p.locales;
+    final locales = normalizeTargetLocales(
+      locale != null
+          ? [locale]
+          : isContinuation
+          ? continuationLocales
+          : batchLocales,
+    );
+    final targetEntries = p.selectedEntries
+        .where((entry) => entryId == null || entry.id == entryId)
+        .toList();
+    if (locales.isEmpty ||
+        targetEntries.isEmpty ||
+        targetEntries.any((entry) => entry.source.trim().isEmpty)) {
       error = '请先选择文案及目标语言。';
       _notify();
       return;
     }
+    final isNewBatch =
+        !retryFailedOnly &&
+        !resume &&
+        !overwrite &&
+        entryId == null &&
+        locale == null;
+    if (isNewBatch) {
+      final sourceIssues = _exporter
+          .validate(p)
+          .where(
+            (issue) =>
+                ['key', 'duplicate', 'empty', 'source'].contains(issue.type),
+          );
+      if (sourceIssues.isNotEmpty) {
+        error = sourceIssues.first.message;
+        _notify();
+        return;
+      }
+      settings.recentLocales
+        ..clear()
+        ..addAll(locales);
+      _changed(project: p);
+    }
+    for (final code in locales) {
+      if (!p.locales.contains(code)) p.locales.add(code);
+    }
     final work = <_Work>[];
     final batchResults = <(String, String), (Entry, int, TranslationResult)>{};
-    for (final entry in p.selectedEntries) {
-      if (entryId != null && entry.id != entryId) continue;
+    for (final entry in targetEntries) {
       for (final code in locales) {
         if (!p.locales.contains(code)) continue;
         final value = entry.value(code);
@@ -395,7 +472,12 @@ class AppController extends ChangeNotifier {
     reused = 0;
     total = work.length;
     activeProjectId = p.id;
-    final job = TaskRecord(total: total);
+    final job = TaskRecord(
+      total: total,
+      locales: locales,
+      batch: entryId == null && locale == null,
+    );
+    if (job.batch) _lastBatchJobs[p.id] = job;
     _activeJob = job;
     p.jobs.insert(0, job);
     if (p.jobs.length > 20) p.jobs.removeRange(20, p.jobs.length);
@@ -672,6 +754,7 @@ class AppController extends ChangeNotifier {
       email: cleanEmail,
       apiBaseUrl: cleanBase,
       includeSource: includeSource,
+      recentLocales: settings.recentLocales,
     );
     message = '设置已保存。';
     _changed();

@@ -126,6 +126,7 @@ class _WorkspaceState extends State<_Workspace> {
   final _prefix = TextEditingController();
   String _split = 'line';
   String _search = '';
+  String _languageSearch = '';
   String _locale = 'en';
   String _previewFile = '';
   List<DocumentBlock> _textBlocks = [];
@@ -198,6 +199,9 @@ class _WorkspaceState extends State<_Workspace> {
   }
 
   void _go(_View view) {
+    if (view == _View.languages && _view == _View.review) {
+      c.setBatchLocales(c.currentProject?.locales ?? []);
+    }
     if (_view == _View.document && view != _View.document) {
       _importGeneration++;
       _importing = false;
@@ -1131,6 +1135,8 @@ class _WorkspaceState extends State<_Workspace> {
       }
     }
     if (!mounted) return;
+    c.applyRecentLocales();
+    _languageSearch = '';
     _input.clear();
     _inputError = null;
     _prefix.clear();
@@ -1193,7 +1199,11 @@ class _WorkspaceState extends State<_Workspace> {
               FilledButton.icon(
                 onPressed: p.selectedEntries.isEmpty || c.running
                     ? null
-                    : () => _go(_View.languages),
+                    : () {
+                        c.applyRecentLocales();
+                        _languageSearch = '';
+                        _go(_View.languages);
+                      },
                 icon: const Icon(Icons.translate, size: 18),
                 label: const Text('翻译未完成项'),
               ),
@@ -1881,6 +1891,16 @@ class _WorkspaceState extends State<_Workspace> {
   Widget _languages() {
     final p = c.currentProject!;
     final plan = c.incrementalPlan();
+    final selectedLocales = c.batchLocales;
+    final query = _languageSearch.trim().toLowerCase();
+    final visibleLanguages = supportedLanguages
+        .where(
+          (language) =>
+              '${language.code} ${language.name} ${language.nativeName}'
+                  .toLowerCase()
+                  .contains(query),
+        )
+        .toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1904,15 +1924,16 @@ class _WorkspaceState extends State<_Workspace> {
                     TextButton(
                       onPressed: c.running
                           ? null
-                          : () => c.setLocales(
-                              p.locales.length == supportedLanguages.length
+                          : () => c.setBatchLocales(
+                              selectedLocales.length ==
+                                      supportedLanguages.length
                                   ? []
                                   : supportedLanguages
                                         .map((l) => l.code)
                                         .toList(),
                             ),
                       child: Text(
-                        p.locales.length == supportedLanguages.length
+                        selectedLocales.length == supportedLanguages.length
                             ? '取消全选'
                             : '选择全部',
                       ),
@@ -1920,106 +1941,164 @@ class _WorkspaceState extends State<_Workspace> {
                   ],
                 ),
                 const SizedBox(height: 17),
-                LayoutBuilder(
-                  builder: (context, constraints) {
-                    final count = constraints.maxWidth > 440 ? 2 : 1;
-                    return Wrap(
-                      spacing: 12,
-                      runSpacing: 12,
-                      children: supportedLanguages.map((language) {
-                        final selected = p.locales.contains(language.code);
-                        return SizedBox(
-                          width:
-                              (constraints.maxWidth - (count - 1) * 12) / count,
-                          child: InkWell(
-                            onTap: c.running
-                                ? null
-                                : () {
-                                    final locales = [...p.locales];
-                                    if (selected) {
-                                      locales.remove(language.code);
-                                    } else {
-                                      locales.add(language.code);
-                                    }
-                                    c.setLocales(locales);
-                                  },
-                            borderRadius: BorderRadius.circular(12),
-                            child: AnimatedContainer(
-                              duration: const Duration(milliseconds: 150),
-                              padding: const EdgeInsets.all(15),
-                              decoration: BoxDecoration(
-                                color: selected
-                                    ? const Color(0xFFEEF6E9)
-                                    : Colors.white,
-                                border: Border.all(
-                                  color: selected
-                                      ? const Color(0xFF9ABC9D)
-                                      : _line,
+                const _Notice(
+                  '简体中文 · 源语言，导出时可包含 zh-Hans.json。另有 34 种目标语言可选。',
+                  icon: Icons.language,
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  '巴西葡萄牙语、菲律宾语与书面挪威语使用备用翻译服务。',
+                  style: TextStyle(fontSize: 11, color: _muted, height: 1.6),
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  key: const ValueKey('language-search'),
+                  initialValue: _languageSearch,
+                  onChanged: (value) => setState(() => _languageSearch = value),
+                  decoration: const InputDecoration(
+                    labelText: '搜索目标语言',
+                    hintText: '中文名、原生名称或语言代码',
+                    prefixIcon: Icon(Icons.search),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 12,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Text(
+                      '已选 ${selectedLocales.length} / ${supportedLanguages.length} 种',
+                      style: const TextStyle(fontSize: 12, color: _muted),
+                    ),
+                    if (query.isNotEmpty && visibleLanguages.isNotEmpty)
+                      TextButton(
+                        onPressed: c.running
+                            ? null
+                            : () => c.setBatchLocales([
+                                ...selectedLocales,
+                                ...visibleLanguages.map(
+                                  (language) => language.code,
                                 ),
+                              ]),
+                        child: const Text('选择搜索结果'),
+                      ),
+                  ],
+                ),
+                if (visibleLanguages.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Text('没有匹配的目标语言'),
+                  ),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 480),
+                  child: SingleChildScrollView(
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final count = constraints.maxWidth > 440 ? 2 : 1;
+                        return Wrap(
+                          spacing: 12,
+                          runSpacing: 12,
+                          children: visibleLanguages.map((language) {
+                            final selected = selectedLocales.contains(
+                              language.code,
+                            );
+                            return SizedBox(
+                              width:
+                                  (constraints.maxWidth - (count - 1) * 12) /
+                                  count,
+                              child: InkWell(
+                                onTap: c.running
+                                    ? null
+                                    : () {
+                                        final locales = [...selectedLocales];
+                                        if (selected) {
+                                          locales.remove(language.code);
+                                        } else {
+                                          locales.add(language.code);
+                                        }
+                                        c.setBatchLocales(locales);
+                                      },
                                 borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Row(
-                                children: [
-                                  Container(
-                                    width: 40,
-                                    height: 40,
-                                    alignment: Alignment.center,
-                                    decoration: BoxDecoration(
+                                child: AnimatedContainer(
+                                  duration: const Duration(milliseconds: 150),
+                                  padding: const EdgeInsets.all(15),
+                                  decoration: BoxDecoration(
+                                    color: selected
+                                        ? const Color(0xFFEEF6E9)
+                                        : Colors.white,
+                                    border: Border.all(
                                       color: selected
-                                          ? const Color(0xFFDFEDD9)
-                                          : _canvas,
-                                      borderRadius: BorderRadius.circular(10),
+                                          ? const Color(0xFF9ABC9D)
+                                          : _line,
                                     ),
-                                    child: Text(
-                                      language.badge,
-                                      style: const TextStyle(
-                                        color: _green,
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
+                                    borderRadius: BorderRadius.circular(12),
                                   ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          language.name,
+                                  child: Row(
+                                    children: [
+                                      Container(
+                                        width: 40,
+                                        height: 40,
+                                        alignment: Alignment.center,
+                                        decoration: BoxDecoration(
+                                          color: selected
+                                              ? const Color(0xFFDFEDD9)
+                                              : _canvas,
+                                          borderRadius: BorderRadius.circular(
+                                            10,
+                                          ),
+                                        ),
+                                        child: Text(
+                                          language.badge,
                                           style: const TextStyle(
-                                            fontSize: 14,
+                                            color: _green,
+                                            fontSize: 12,
                                             fontWeight: FontWeight.w600,
                                           ),
                                         ),
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          language.nativeName,
-                                          style: const TextStyle(
-                                            fontSize: 11,
-                                            color: _muted,
-                                          ),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              language.name,
+                                              style: const TextStyle(
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              language.nativeName,
+                                              style: const TextStyle(
+                                                fontSize: 11,
+                                                color: _muted,
+                                              ),
+                                            ),
+                                          ],
                                         ),
-                                      ],
-                                    ),
+                                      ),
+                                      Icon(
+                                        selected
+                                            ? Icons.check_circle_rounded
+                                            : Icons.radio_button_unchecked,
+                                        color: selected
+                                            ? _green
+                                            : const Color(0xFFC9D7C8),
+                                        size: 21,
+                                      ),
+                                    ],
                                   ),
-                                  Icon(
-                                    selected
-                                        ? Icons.check_circle_rounded
-                                        : Icons.radio_button_unchecked,
-                                    color: selected
-                                        ? _green
-                                        : const Color(0xFFC9D7C8),
-                                    size: 21,
-                                  ),
-                                ],
+                                ),
                               ),
-                            ),
-                          ),
+                            );
+                          }).toList(),
                         );
-                      }).toList(),
-                    );
-                  },
+                      },
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -2034,7 +2113,7 @@ class _WorkspaceState extends State<_Workspace> {
                 ),
                 const SizedBox(height: 22),
                 _summary('中文文案', '${p.selectedEntries.length} 条'),
-                _summary('目标语言', '${p.locales.length} 种'),
+                _summary('目标语言', '${selectedLocales.length} 种'),
                 const Divider(height: 30),
                 const Text(
                   '需要新增翻译',
@@ -2056,7 +2135,7 @@ class _WorkspaceState extends State<_Workspace> {
                 Wrap(
                   spacing: 6,
                   runSpacing: 6,
-                  children: p.locales
+                  children: selectedLocales
                       .map((code) => _Tag(languageName(code)))
                       .toList(),
                 ),
@@ -2075,7 +2154,7 @@ class _WorkspaceState extends State<_Workspace> {
                   width: double.infinity,
                   child: FilledButton.icon(
                     onPressed:
-                        p.locales.isEmpty ||
+                        selectedLocales.isEmpty ||
                             p.selectedEntries.isEmpty ||
                             c.running
                         ? null
@@ -2116,13 +2195,12 @@ class _WorkspaceState extends State<_Workspace> {
     ),
   );
 
-  void _startTranslation({bool retry = false}) {
+  void _startTranslation({bool retry = false, bool resume = false}) {
     _go(_View.progress);
-    _guard(() => c.startTranslation(retryFailedOnly: retry));
+    _guard(() => c.startTranslation(retryFailedOnly: retry, resume: resume));
   }
 
   Widget _progress() {
-    final p = c.currentProject!;
     final ratio = c.total == 0 ? 0.0 : c.completed / c.total;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -2211,7 +2289,8 @@ class _WorkspaceState extends State<_Workspace> {
                       ],
                     ),
                     const SizedBox(height: 24),
-                    for (final locale in p.locales) _localeProgress(locale),
+                    for (final locale in c.activeBatchLocales)
+                      _localeProgress(locale),
                   ],
                 ),
               ),
@@ -2229,7 +2308,7 @@ class _WorkspaceState extends State<_Workspace> {
                     ),
                   if (!c.running && c.paused)
                     FilledButton.icon(
-                      onPressed: _startTranslation,
+                      onPressed: () => _startTranslation(resume: true),
                       icon: const Icon(Icons.play_arrow, size: 18),
                       label: const Text('继续翻译'),
                     ),

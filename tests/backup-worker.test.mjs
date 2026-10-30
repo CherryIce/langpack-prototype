@@ -112,14 +112,40 @@ test('declared, streamed byte limits and Unicode character limits are enforced b
   await payload(await handler(streamed, env), 413); assert.equal(cancelled, true);
 });
 
-test('all seven target language names are fixed and response aliases are accepted', async () => {
-  const names = { en: 'English', ja: 'Japanese', ko: 'Korean', fr: 'French', de: 'German', es: 'Spanish', 'zh-Hant': 'Traditional Chinese' };
+test('all 34 target language names preserve the MediaServiceClient resource distinctions', async () => {
+  const names = {
+    'zh-Hant': 'Traditional Chinese', en: 'English',
+    'pt-BR': 'Portuguese (Brazil)', 'pt-PT': 'Portuguese (Portugal)',
+    ms: 'Malay', th: 'Thai', fr: 'French', es: 'Spanish', ar: 'Arabic',
+    fil: 'Filipino', vi: 'Vietnamese', ru: 'Russian', tr: 'Turkish',
+    id: 'Indonesian', ja: 'Japanese', ko: 'Korean', de: 'German', hi: 'Hindi',
+    hu: 'Hungarian', it: 'Italian', ro: 'Romanian', sv: 'Swedish', bg: 'Bulgarian',
+    pl: 'Polish', da: 'Danish', fi: 'Finnish', nl: 'Dutch', cs: 'Czech',
+    sk: 'Slovak', uk: 'Ukrainian', el: 'Greek', nb: 'Norwegian Bokmål',
+    hr: 'Croatian', si: 'Sinhala'
+  };
+  assert.equal(Object.keys(names).length, 34);
   for (const [locale, name] of Object.entries(names)) {
     const handler = createHandler({ fetchImpl: async (_, init) => {
       assert.equal(JSON.parse(init.body).targetLanguage, name);
       return result('translated', { targetLanguage: locale, items: [{ id: 'segment-1', translatedText: 'translated' }] });
     } });
     await payload(await handler(request({ content: '你好', locale }), env), 200);
+  }
+});
+
+test('source Chinese and ambiguous substitute language codes do not reach upstream', async () => {
+  const handler = createHandler({ fetchImpl: () => assert.fail('must not translate source or a substitute language') });
+  for (const locale of ['zh-Hans', 'zh-CN', 'pt', 'tl', 'no', 'sl']) {
+    assert.equal((await payload(await handler(request({ content: '你好', locale }), env), 400)).code, 'BACKUP_LANGUAGE');
+  }
+});
+
+test('Portuguese variants, Filipino and Norwegian Bokmål cannot accept another language echo', async () => {
+  const wrong = [['pt-BR', 'pt-PT'], ['pt-PT', 'Portuguese (Brazil)'], ['fil', 'tl-PH'], ['nb', 'no-NO'], ['si', 'Slovenian']];
+  for (const [locale, targetLanguage] of wrong) {
+    const handler = createHandler({ fetchImpl: async () => result('translated', { targetLanguage }) });
+    assert.equal((await payload(await handler(request({ content: '登录', locale }), env), 502)).code, 'BACKUP_RESPONSE');
   }
 });
 

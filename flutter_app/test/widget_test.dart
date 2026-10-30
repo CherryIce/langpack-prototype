@@ -69,6 +69,75 @@ Future<void> _tap(WidgetTester tester, Finder finder) async {
 
 void main() {
   testWidgets(
+    '34 target languages can be searched and selected on a narrow screen',
+    (tester) async {
+      tester.view.physicalSize = const Size(320, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final controller = await _controller();
+      controller.createProject('语言覆盖');
+      controller.addBlocks([DocumentBlock('登录')]);
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(LangPackApp(controller: controller));
+      await tester.pumpAndSettle();
+      await _tap(tester, find.text('语言覆盖').first);
+      await _tap(tester, find.text('翻译未完成项'));
+      expect(find.textContaining('34 种目标语言'), findsOneWidget);
+      final search = find.byKey(const ValueKey('language-search'));
+      await tester.enterText(search, '葡萄牙');
+      await tester.pumpAndSettle();
+      expect(find.text('葡萄牙语（巴西）'), findsOneWidget);
+      expect(find.text('葡萄牙语（葡萄牙）'), findsOneWidget);
+      expect(find.text('书面挪威语'), findsNothing);
+      await _tap(tester, find.text('选择搜索结果'));
+      expect(
+        controller.batchLocales,
+        containsAll(['en', 'ja', 'pt-BR', 'pt-PT']),
+      );
+      expect(controller.settings.recentLocales, isEmpty);
+      await tester.enterText(search, 'සිංහල');
+      await tester.pumpAndSettle();
+      expect(find.text('僧伽罗语'), findsOneWidget);
+      await tester.enterText(search, 'does-not-exist');
+      await tester.pumpAndSettle();
+      expect(find.text('没有匹配的目标语言'), findsOneWidget);
+      await _tap(tester, find.text('选择全部'));
+      expect(controller.batchLocales.length, 34);
+      expect(controller.batchLocales, isNot(contains('zh-Hans')));
+      expect(controller.currentProject!.locales, ['en', 'ja']);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  for (final document in [false, true]) {
+    testWidgets(
+      'new ${document ? 'document' : 'text'} flow applies recent targets without recording checkbox changes',
+      (tester) async {
+        tester.view.physicalSize = const Size(1440, 1100);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final controller = await _controller();
+        controller.createProject('历史项目');
+        controller.setLocales(['en']);
+        controller.settings.recentLocales.addAll(['fil', 'nb']);
+        addTearDown(controller.dispose);
+        await tester.pumpWidget(LangPackApp(controller: controller));
+        await tester.pumpAndSettle();
+        expect(controller.currentProject!.locales, ['en']);
+        await _tap(tester, find.text(document ? '导入文档' : '输入文案'));
+        expect(controller.currentProject!.locales, ['en']);
+        expect(controller.batchLocales, ['fil', 'nb']);
+        expect(controller.settings.recentLocales, ['fil', 'nb']);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+  }
+
+  testWidgets(
     'restoring the built-in proxy ignores a late custom server status',
     (tester) async {
       tester.view.physicalSize = const Size(1440, 1100);

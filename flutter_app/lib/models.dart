@@ -1,13 +1,40 @@
 import 'dart:math';
 
 const supportedLanguages = <Language>[
+  Language('zh-Hant', '繁体中文', '繁體中文', '繁'),
   Language('en', '英语', 'English', 'EN'),
+  Language('pt-BR', '葡萄牙语（巴西）', 'Português (Brasil)', 'BR'),
+  Language('pt-PT', '葡萄牙语（葡萄牙）', 'Português (Portugal)', 'PT'),
+  Language('ms', '马来语', 'Bahasa Melayu', 'MS'),
+  Language('th', '泰语', 'ไทย', 'TH'),
+  Language('fr', '法语', 'Français', 'FR'),
+  Language('es', '西班牙语', 'Español', 'ES'),
+  Language('ar', '阿拉伯语', 'العربية', 'AR'),
+  Language('fil', '菲律宾语', 'Filipino', 'FIL'),
+  Language('vi', '越南语', 'Tiếng Việt', 'VI'),
+  Language('ru', '俄语', 'Русский', 'RU'),
+  Language('tr', '土耳其语', 'Türkçe', 'TR'),
+  Language('id', '印度尼西亚语', 'Bahasa Indonesia', 'ID'),
   Language('ja', '日语', '日本語', 'JA'),
   Language('ko', '韩语', '한국어', 'KO'),
-  Language('fr', '法语', 'Français', 'FR'),
   Language('de', '德语', 'Deutsch', 'DE'),
-  Language('es', '西班牙语', 'Español', 'ES'),
-  Language('zh-Hant', '繁体中文', '繁體中文', '繁'),
+  Language('hi', '印地语', 'हिन्दी', 'HI'),
+  Language('hu', '匈牙利语', 'Magyar', 'HU'),
+  Language('it', '意大利语', 'Italiano', 'IT'),
+  Language('ro', '罗马尼亚语', 'Română', 'RO'),
+  Language('sv', '瑞典语', 'Svenska', 'SV'),
+  Language('bg', '保加利亚语', 'Български', 'BG'),
+  Language('pl', '波兰语', 'Polski', 'PL'),
+  Language('da', '丹麦语', 'Dansk', 'DA'),
+  Language('fi', '芬兰语', 'Suomi', 'FI'),
+  Language('nl', '荷兰语', 'Nederlands', 'NL'),
+  Language('cs', '捷克语', 'Čeština', 'CS'),
+  Language('sk', '斯洛伐克语', 'Slovenčina', 'SK'),
+  Language('uk', '乌克兰语', 'Українська', 'UK'),
+  Language('el', '希腊语', 'Ελληνικά', 'EL'),
+  Language('nb', '书面挪威语', 'Norsk bokmål', 'NB'),
+  Language('hr', '克罗地亚语', 'Hrvatski', 'HR'),
+  Language('si', '僧伽罗语', 'සිංහල', 'SI'),
 ];
 
 class Language {
@@ -24,6 +51,19 @@ String languageName(String code) => supportedLanguages
       orElse: () => Language(code, code, code, code),
     )
     .name;
+
+List<String> normalizeTargetLocales(Iterable<dynamic> codes) {
+  final canonical = {
+    for (final language in supportedLanguages)
+      language.code.toLowerCase(): language.code,
+  };
+  return codes
+      .whereType<String>()
+      .map((code) => canonical[code.trim().toLowerCase()])
+      .whereType<String>()
+      .toSet()
+      .toList();
+}
 
 String newId() =>
     '${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}_${Random.secure().nextInt(0x7fffffff).toRadixString(36)}';
@@ -264,7 +304,10 @@ class TaskRecord {
     this.failed = 0,
     this.provider = '',
     this.reused = 0,
+    List<String>? locales,
+    this.batch = true,
   }) : id = id ?? newId(),
+       locales = normalizeTargetLocales(locales ?? const <String>[]),
        createdAt = createdAt ?? DateTime.now();
   final String id;
   final DateTime createdAt;
@@ -274,6 +317,8 @@ class TaskRecord {
   int failed;
   String provider;
   int reused;
+  final List<String> locales;
+  final bool batch;
   Map<String, dynamic> toJson() => {
     'id': id,
     'createdAt': createdAt.toIso8601String(),
@@ -283,6 +328,8 @@ class TaskRecord {
     'failed': failed,
     'provider': provider,
     'reused': reused,
+    'locales': locales,
+    'batch': batch,
   };
   factory TaskRecord.fromJson(Map<String, dynamic> data) => TaskRecord(
     id: data['id'] as String?,
@@ -295,6 +342,10 @@ class TaskRecord {
     failed: data['failed'] as int? ?? 0,
     provider: data['provider'] as String? ?? '',
     reused: data['reused'] as int? ?? 0,
+    locales: normalizeTargetLocales(
+      data['locales'] is List ? data['locales'] as List : const [],
+    ),
+    batch: data['batch'] != false,
   );
 }
 
@@ -313,14 +364,17 @@ class AppSettings {
     this.email = '',
     this.apiBaseUrl = const String.fromEnvironment('API_BASE_URL'),
     this.includeSource = true,
-  });
+    Iterable<dynamic> recentLocales = const [],
+  }) : recentLocales = normalizeTargetLocales(recentLocales);
   String email;
   String apiBaseUrl;
   bool includeSource;
+  final List<String> recentLocales;
   Map<String, dynamic> toJson() => {
     'email': email,
     'apiBaseUrl': apiBaseUrl,
     'includeSource': includeSource,
+    'recentLocales': normalizeTargetLocales(recentLocales),
   };
   factory AppSettings.fromJson(Map<String, dynamic> data) => AppSettings(
     email: data['email'] as String? ?? '',
@@ -328,6 +382,9 @@ class AppSettings {
         data['apiBaseUrl'] as String? ??
         const String.fromEnvironment('API_BASE_URL'),
     includeSource: data['includeSource'] != false,
+    recentLocales: data['recentLocales'] is List
+        ? data['recentLocales'] as List
+        : const [],
   );
 }
 

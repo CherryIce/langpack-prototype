@@ -46,6 +46,134 @@ Matcher failure(String code, {bool? fatal, bool? isQuota}) =>
         );
 
 void main() {
+  test(
+    'all 34 canonical targets route without changing language semantics',
+    () async {
+      final observed = <String, String>{};
+      final backupTargets = <String>[];
+      final service = TranslationService(
+        client: MockClient((request) async {
+          if (request.method == 'POST') {
+            backupTargets.add(
+              (jsonDecode(request.body) as Map)['locale'] as String,
+            );
+            return backup('Translated');
+          }
+          final pair = request.url.queryParameters['langpair']!;
+          observed[pair.split('|').last] = request.url.queryParameters['q']!;
+          return success('Translated');
+        }),
+        minInterval: Duration.zero,
+      );
+      addTearDown(service.dispose);
+      for (final language in supportedLanguages) {
+        final result = await service.translate(
+          '登录',
+          language.code,
+          token: CancelToken(),
+        );
+        expect(
+          result.provider,
+          ['pt-BR', 'fil', 'nb'].contains(language.code)
+              ? 'ZTAITrans'
+              : 'MyMemory',
+        );
+      }
+      expect(backupTargets, ['pt-BR', 'fil', 'nb']);
+      expect(observed.length, 31);
+      expect(
+        observed.keys,
+        containsAll(['pt-PT', 'zh-TW', 'si-LK', 'en', 'ar', 'hi']),
+      );
+      expect(
+        observed.keys.any(
+          (code) =>
+              ['pt-BR', 'tl-PH', 'fil-PH', 'no-NO', 'nb-NO'].contains(code),
+        ),
+        isFalse,
+      );
+      await expectLater(
+        service.translate('登录', 'zh-Hans', token: CancelToken()),
+        throwsA(failure('LANGUAGE')),
+      );
+    },
+  );
+
+  test('backup-only languages do not open the primary quota circuit', () async {
+    final methods = <String>[];
+    final statuses = <String>[];
+    final service = TranslationService(
+      client: MockClient((request) async {
+        methods.add(request.method);
+        return request.method == 'POST' ? backup('Entrar') : success('Login');
+      }),
+      minInterval: Duration.zero,
+    );
+    addTearDown(service.dispose);
+    await service.translate(
+      '登录',
+      'pt-BR',
+      token: CancelToken(),
+      onStatus: statuses.add,
+    );
+    await service.translate(
+      '登录',
+      'en',
+      token: CancelToken(),
+      onStatus: statuses.add,
+    );
+    expect(methods, ['POST', 'GET']);
+    expect(statuses.any((status) => status.contains('额度已用尽')), isFalse);
+  });
+
+  test(
+    'new languages preserve their canonical locale through quota fallback',
+    () async {
+      final locales = <String>[];
+      final service = TranslationService(
+        client: MockClient((request) async {
+          if (request.method != 'POST') return quota();
+          locales.add((jsonDecode(request.body) as Map)['locale'] as String);
+          return backup('Translated');
+        }),
+        minInterval: Duration.zero,
+      );
+      addTearDown(service.dispose);
+      for (final language in supportedLanguages) {
+        await service.translate('登录', language.code, token: CancelToken());
+      }
+      expect(
+        locales,
+        supportedLanguages.map((language) => language.code).toList(),
+      );
+    },
+  );
+
+  test(
+    'chunk joins add spaces for Hindi and Sinhala but preserve Thai writing',
+    () async {
+      for (final locale in ['hi', 'si', 'th']) {
+        final word = {'hi': 'हिन्दी', 'si': 'සිංහල', 'th': 'ไทย'}[locale]!;
+        final source = '中' * 300;
+        final service = TranslationService(
+          client: MockClient((request) async => success(word)),
+          minInterval: Duration.zero,
+        );
+        final result = await service.translate(
+          source,
+          locale,
+          token: CancelToken(),
+        );
+        final count = splitTranslationText(source).length;
+        expect(
+          result.text,
+          List.filled(count, word).join(locale == 'th' ? '' : ' '),
+        );
+        service.dispose();
+      }
+    },
+  );
+
   group('UTF-8 chunks', () {
     test('preserves every Unicode scalar and marker within 480 bytes', () {
       final source = '${'这是一段带有表情的中文😀。' * 90}ZXQPH123456QXZ${'尾部' * 80}';

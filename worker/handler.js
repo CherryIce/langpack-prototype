@@ -3,7 +3,18 @@ const UPSTREAM = 'https://aitrans-iqwek72342.futureinvest.id/api/translate/text'
 const MAX_REQUEST_BYTES = 256 * 1024;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_CONTENT_CHARACTERS = 50000;
-const TARGETS = Object.freeze({ en: 'English', ja: 'Japanese', ko: 'Korean', fr: 'French', de: 'German', es: 'Spanish', 'zh-Hant': 'Traditional Chinese' });
+// Resource/export codes align with MediaServiceClient. Simplified Chinese is source-only.
+const TARGETS = Object.freeze({
+  'zh-Hant': 'Traditional Chinese', en: 'English',
+  'pt-BR': 'Portuguese (Brazil)', 'pt-PT': 'Portuguese (Portugal)',
+  ms: 'Malay', th: 'Thai', fr: 'French', es: 'Spanish', ar: 'Arabic',
+  fil: 'Filipino', vi: 'Vietnamese', ru: 'Russian', tr: 'Turkish',
+  id: 'Indonesian', ja: 'Japanese', ko: 'Korean', de: 'German', hi: 'Hindi',
+  hu: 'Hungarian', it: 'Italian', ro: 'Romanian', sv: 'Swedish', bg: 'Bulgarian',
+  pl: 'Polish', da: 'Danish', fi: 'Finnish', nl: 'Dutch', cs: 'Czech',
+  sk: 'Slovak', uk: 'Ukrainian', el: 'Greek', nb: 'Norwegian Bokmål',
+  hr: 'Croatian', si: 'Sinhala'
+});
 const TARGET_ALIASES = Object.freeze({
   en: ['english', 'en', 'en-us', 'en_us', 'en-gb', 'en_gb', '英语'],
   ja: ['japanese', 'ja', 'ja-jp', 'ja_jp', '日语'],
@@ -11,7 +22,34 @@ const TARGET_ALIASES = Object.freeze({
   fr: ['french', 'fr', 'fr-fr', 'fr_fr', '法语'],
   de: ['german', 'de', 'de-de', 'de_de', '德语'],
   es: ['spanish', 'es', 'es-es', 'es_es', '西班牙语'],
-  'zh-Hant': ['traditional chinese', 'zh-hant', 'zh-tw', 'zh_tw', '繁体中文', '繁體中文']
+  'zh-Hant': ['traditional chinese', 'zh-hant', 'zh-tw', 'zh_tw', '繁体中文', '繁體中文'],
+  'pt-BR': ['portuguese (brazil)', 'brazilian portuguese', 'pt-br', 'pt_br', '葡萄牙语（巴西）'],
+  'pt-PT': ['portuguese (portugal)', 'european portuguese', 'pt-pt', 'pt_pt', '葡萄牙语（葡萄牙）'],
+  ms: ['malay', 'ms', 'ms-my', 'ms_my', '马来语'],
+  th: ['thai', 'th', 'th-th', 'th_th', '泰语'],
+  ar: ['arabic', 'ar', 'ar-sa', 'ar_sa', '阿拉伯语'],
+  fil: ['filipino', 'fil', 'fil-ph', 'fil_ph', '菲律宾语'],
+  vi: ['vietnamese', 'vi', 'vi-vn', 'vi_vn', '越南语'],
+  ru: ['russian', 'ru', 'ru-ru', 'ru_ru', '俄语'],
+  tr: ['turkish', 'tr', 'tr-tr', 'tr_tr', '土耳其语'],
+  id: ['indonesian', 'id', 'id-id', 'id_id', '印度尼西亚语'],
+  hi: ['hindi', 'hi', 'hi-in', 'hi_in', '印地语'],
+  hu: ['hungarian', 'hu', 'hu-hu', 'hu_hu', '匈牙利语'],
+  it: ['italian', 'it', 'it-it', 'it_it', '意大利语'],
+  ro: ['romanian', 'ro', 'ro-ro', 'ro_ro', '罗马尼亚语'],
+  sv: ['swedish', 'sv', 'sv-se', 'sv_se', '瑞典语'],
+  bg: ['bulgarian', 'bg', 'bg-bg', 'bg_bg', '保加利亚语'],
+  pl: ['polish', 'pl', 'pl-pl', 'pl_pl', '波兰语'],
+  da: ['danish', 'da', 'da-dk', 'da_dk', '丹麦语'],
+  fi: ['finnish', 'fi', 'fi-fi', 'fi_fi', '芬兰语'],
+  nl: ['dutch', 'nl', 'nl-nl', 'nl_nl', '荷兰语'],
+  cs: ['czech', 'cs', 'cs-cz', 'cs_cz', '捷克语'],
+  sk: ['slovak', 'sk', 'sk-sk', 'sk_sk', '斯洛伐克语'],
+  uk: ['ukrainian', 'uk', 'uk-ua', 'uk_ua', '乌克兰语'],
+  el: ['greek', 'el', 'el-gr', 'el_gr', '希腊语'],
+  nb: ['norwegian bokmål', 'norwegian bokmal', 'bokmål', 'nb', 'nb-no', 'nb_no', '书面挪威语'],
+  hr: ['croatian', 'hr', 'hr-hr', 'hr_hr', '克罗地亚语'],
+  si: ['sinhala', 'sinhalese', 'si', 'si-lk', 'si_lk', '僧伽罗语']
 });
 
 function json(body, status = 200, extraHeaders = {}) {

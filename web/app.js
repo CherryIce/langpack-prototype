@@ -43,18 +43,19 @@
     bolt: '<path d="m13 2-9 12h7l-1 8 10-12h-8Z"/>'
   };
   const icon = name => '<svg viewBox="0 0 24 24" aria-hidden="true">' + (ICONS[name] || ICONS.file) + '</svg>';
-  const LANGS = [
-    { code: 'en', name: '英语', native: 'English', label: 'EN' }, { code: 'ja', name: '日语', native: '日本語', label: 'JA' },
-    { code: 'ko', name: '韩语', native: '한국어', label: 'KO' }, { code: 'fr', name: '法语', native: 'Français', label: 'FR' },
-    { code: 'de', name: '德语', native: 'Deutsch', label: 'DE' }, { code: 'es', name: '西班牙语', native: 'Español', label: 'ES' },
-    { code: 'zh-Hant', name: '繁体中文', native: '繁體中文', label: '繁' }
-  ];
+  const LANGS = window.LangPackLanguages.targets;
+  const normalizeLocales = window.LangPackLanguages.normalizeTargets;
+  function defaultLocales(fallback = []) {
+    const recent = normalizeLocales(state.settings.recentLocales);
+    const previous = normalizeLocales(fallback);
+    return recent.length ? recent : previous.length ? previous : ['en', 'ja', 'ko'];
+  }
   const lang = code => LANGS.find(x => x.code === code) || { code, name: code === 'zh-Hans' ? '简体中文' : code, native: '', label: code };
   const textOf = value => value && typeof value === 'object' ? String(value.text ?? '') : String(value ?? '');
   const STORAGE = 'langpack-prototype-v1';
   const SAMPLE = '登录\n注册账号\n忘记密码\n欢迎回来，{name}\n保存更改\n开启通知';
   const DOC_SAMPLE = '欢迎使用译包。\n\n一次输入，即可生成多种语言的翻译结果。\n\n为每一段中文生成稳定的语义 key。\n\n按语言导出 JSON，让本地化更简单。';
-  let toastTimer, saveTimer, importRequest = 0, batchGeneration = 0;
+  let toastTimer, saveTimer, importRequest = 0, batchGeneration = 0, languageSearch = '';
   let batchController = null, singleController = null, singleRequest = null;
   const translationClients = new Map();
   const isRealJob = job => !!job && ['MyMemory', 'TranslationChain', 'ZTAITrans'].includes(job.provider) && Array.isArray(job.items);
@@ -84,6 +85,7 @@
   function migrate(saved) {
     if (!saved || !Array.isArray(saved.projects) || ![1, 2].includes(saved.version)) return initialState();
     saved.settings = { includeSource: true, pretty: true, translationEmail: '', primaryCircuit: { until: 0 }, ...saved.settings };
+    saved.settings.recentLocales = normalizeLocales(saved.settings.recentLocales);
     if (!saved.settings.primaryCircuit || !Number.isFinite(saved.settings.primaryCircuit.until)) saved.settings.primaryCircuit = { until: 0 };
     saved.jobs ||= []; saved.exports ||= [];
     if (saved.version === 1) {
@@ -175,7 +177,8 @@
     if (state.session?.status === 'running') { toast('当前翻译正在进行，请先完成或取消该任务。'); return nav('translate'); }
     cancelSingle();
     const p = currentProject();
-    state.session = { id: uid(), projectId: p.id, mode, text: '', split: 'line', context: '', entries: [], locales: p.locales.length ? [...p.locales] : ['en', 'ja', 'ko'], status: 'draft', fileName: '', includeSource: state.settings.includeSource, exportLocales: [], pretty: state.settings.pretty, committed: false };
+    languageSearch = '';
+    state.session = { id: uid(), projectId: p.id, mode, text: '', split: 'line', context: '', entries: [], locales: defaultLocales(p.locales), status: 'draft', fileName: '', includeSource: state.settings.includeSource, exportLocales: [], pretty: state.settings.pretty, committed: false };
     state.reviewIndex = 0;
     nav(mode === 'document' ? 'import' : 'input');
   }
@@ -212,11 +215,20 @@
     const s = state.session;
     return workflowHeader(0, '从一份文档开始', '按段落整理，完整保留你的表达。') + `<div class="two-columns"><section class="panel input-panel"><div class="panel-head"><div class="input-tabs grow"><button class="input-tab" data-action="switch-mode" data-mode="text">${icon('text')}文本输入</button><button class="input-tab active" data-action="switch-mode" data-mode="document">${icon('upload')}文档导入</button></div></div><div class="panel-body"><input id="file-input" class="hidden" type="file" accept=".txt,.md,.markdown,.docx">${s.fileName ? `<div class="file-loaded"><div class="tag-icon">${icon('file')}</div><div class="grow"><h3>${esc(s.fileName)}</h3><p>${s.entries.length} 个内容块 · ${selectedEntries().length} 个已选择</p></div><button class="icon-button" data-action="pick-file" aria-label="重新选择文件">${icon('refresh')}</button></div><div style="height:16px"></div>` : ''}<div class="drop-zone" id="drop-zone"><span class="drop-icon">${icon('upload')}</span><h3>拖入文档，开始你的多语言旅程</h3><p>支持 TXT、Markdown、DOCX · 最大 10 MB</p><button class="btn" data-action="pick-file">${icon('folder')}选择文档</button></div><div class="doc-sample"><span>${icon('file')}</span><div class="grow"><h3>先用示例文档体验</h3><p>产品介绍.md · 4 个中文段落</p></div><button class="btn small-btn soft" data-action="load-doc-example">载入示例</button></div><label class="field-label context-label" for="context">文档使用场景 <span class="muted">（选填）</span></label><textarea class="field context-field" id="context" placeholder="例如：产品官网的功能介绍">${esc(s.context)}</textarea><div id="import-error" class="error-text" role="alert"></div></div><div class="panel-footer"><div class="notice">${icon('shield')}<span>文档文件在本地解析；开始翻译后，选中的段落会发送给 MyMemory 或备用 ZTAITrans。请先调整需要翻译的内容。</span></div></div></section><section class="panel preview-panel"><div class="panel-head"><h2>段落预览</h2><span class="badge ok">${selectedEntries().length} / ${s.entries.length} 已选</span></div><div class="panel-body document-list" style="display:block">${s.entries.length ? `<div class="bulk-actions"><button class="text-button" data-action="select-paragraphs">全选 / 取消全选</button><span>勾选需要翻译的内容</span></div>${documentRows()}` : `<div class="empty-preview">${icon('file')}<p>导入后，在这里预览与调整段落</p></div>`}</div></section></div>${flowFooter('to-languages', '下一步：选择语言', '先预览，再翻译；每段对应一个 key', false, !selectedEntries().length)}`;
   }
+  function filteredLanguages() {
+    const query = languageSearch.trim().toLowerCase();
+    return LANGS.filter(language => !query || `${language.name} ${language.native} ${language.code}`.toLowerCase().includes(query));
+  }
+  function languageOptions() {
+    const locales = normalizeLocales(state.session.locales);
+    const visible = filteredLanguages();
+    return visible.length ? visible.map(language => `<label class="language-option ${locales.includes(language.code) ? 'selected' : ''}"><span class="language-code ${language.code}">${language.label}</span><span class="language-label"><strong>${language.name}</strong><span><bdi>${language.native}</bdi> · ${language.code}${language.backupOnly ? ' · 备用服务' : ''}</span></span><input type="checkbox" data-locale="${language.code}" ${locales.includes(language.code) ? 'checked' : ''} aria-label="选择${language.name}"></label>`).join('') : '<p class="language-no-results">没有找到匹配的语言。已选语言继续保留，可清空搜索后调整。</p>';
+  }
   function renderLanguages() {
-    const s = state.session;
+    const s = state.session, locales = normalizeLocales(s.locales);
     const chars = selectedEntries().reduce((sum, e) => sum + e.source.length, 0);
-    const plan = J.plan({ entries: selectedEntries(), locales: s.locales, memoryEntries: sessionProject().entries });
-    return workflowHeader(1, '想让哪些语言读懂你？', '一次多选，为每种语言生成独立的翻译结果。') + `<div class="language-layout"><section class="panel"><div class="panel-head"><h2>选择目标语言</h2><button class="text-button" data-action="toggle-all-languages">${s.locales.length === LANGS.length ? '取消全选' : '选择全部'}</button></div><div class="panel-body"><p class="subheading">源语言：简体中文 · zh-Hans</p><div class="language-grid">${LANGS.map(l => `<label class="language-option ${s.locales.includes(l.code) ? 'selected' : ''} ${l.code === 'zh-Hant' ? 'zh-option' : ''}"><span class="language-code ${l.code}">${l.label}</span><span class="language-label"><strong>${l.name}</strong><span>${l.native} · ${l.code}</span></span><input type="checkbox" data-locale="${l.code}" ${s.locales.includes(l.code) ? 'checked' : ''} aria-label="选择${l.name}"></label>`).join('')}</div></div></section><aside class="panel selected-summary"><div><h3>这次的翻译计划</h3><div class="selected-languages">${s.locales.length ? s.locales.map(l => `<span class="selected-chip">${lang(l).name}<button data-action="remove-locale" data-locale="${l}" aria-label="移除${lang(l).name}">×</button></span>`).join('') : '<span class="small muted">至少选择一种目标语言</span>'}</div></div><div class="divider"></div><div><div class="summary-row"><span>中文文案</span><strong>${selectedEntries().length} 条</strong></div><div class="summary-row"><span>目标语言</span><strong>${s.locales.length} 种</strong></div><div class="summary-row"><span>原文字符</span><strong>${chars}</strong></div><div class="summary-row"><span>复用已有译文</span><strong>${plan.reused} 条</strong></div><div class="summary-row"><span>保留人工修改 / 确认</span><strong>${plan.protected} 条</strong></div><div class="summary-row"><span>合并重复原文</span><strong>${plan.duplicatePending} 条</strong></div><div class="summary-row summary-total"><span>本次增量待译</span><strong>${plan.uniquePending}<span style="font-size:11px;letter-spacing:0;margin-left:5px">条译文</span></strong></div></div><div class="service-box"><div class="flex"><span class="flex">${icon('sparkles')}MyMemory → ZTAITrans</span><span class="badge ok">真实 API</span></div><p>MyMemory 按 480 字节拆分；额度耗尽后自动改用 ZTAITrans 翻译完整段落，并在后续内容中使用备用服务。</p></div><div class="notice" style="margin-top:16px">${icon('shield')}<span>仅新增、原文变更或缺失目标语言的内容会发送给翻译服务；同项目中可复用的译文与人工修改会保留。重复原文按目标语言合并处理，MyMemory 额度耗尽时自动切换备用服务。</span></div></aside></div>${flowFooter('start-translation', plan.uniquePending ? '开始增量翻译' : '复用译文并校对', '', true, !s.locales.length)}`;
+    const plan = J.plan({ entries: selectedEntries(), locales, memoryEntries: sessionProject().entries });
+    return workflowHeader(1, '想让哪些语言读懂你？', '一次多选，为每种语言生成独立的翻译结果。') + `<div class="language-layout"><section class="panel"><div class="panel-head"><h2>选择目标语言</h2><button class="text-button" data-action="toggle-all-languages">${locales.length === LANGS.length ? '取消全选' : '选择全部 34 种'}</button></div><div class="panel-body"><p class="subheading">35 种语言覆盖 · 简体中文 zh-Hans 为固定源语言；34 种目标语言可选</p><label class="language-search" for="language-search">${icon('search')}<input id="language-search" type="search" placeholder="搜索语言、原名或代码" value="${esc(languageSearch)}" autocomplete="off"></label><p class="caption" id="language-search-count">${filteredLanguages().length} / ${LANGS.length} 种可选目标语言</p><div class="language-grid" id="language-options">${languageOptions()}</div></div></section><aside class="panel selected-summary"><div><h3>这次的翻译计划</h3><div class="selected-languages">${locales.length ? locales.map(l => `<span class="selected-chip">${lang(l).name}<button data-action="remove-locale" data-locale="${l}" aria-label="移除${lang(l).name}">×</button></span>`).join('') : '<span class="small muted">至少选择一种目标语言</span>'}</div></div><div class="divider"></div><div><div class="summary-row"><span>中文文案</span><strong>${selectedEntries().length} 条</strong></div><div class="summary-row"><span>目标语言</span><strong>${locales.length} 种</strong></div><div class="summary-row"><span>原文字符</span><strong>${chars}</strong></div><div class="summary-row"><span>复用已有译文</span><strong>${plan.reused} 条</strong></div><div class="summary-row"><span>保留人工修改 / 确认</span><strong>${plan.protected} 条</strong></div><div class="summary-row"><span>合并重复原文</span><strong>${plan.duplicatePending} 条</strong></div><div class="summary-row summary-total"><span>本次增量待译</span><strong>${plan.uniquePending}<span style="font-size:11px;letter-spacing:0;margin-left:5px">条译文</span></strong></div></div><div class="service-box"><div class="flex"><span class="flex">${icon('sparkles')}MyMemory → ZTAITrans</span><span class="badge ok">真实 API</span></div><p>MyMemory 按 480 字节拆分；额度耗尽后自动改用 ZTAITrans 翻译完整段落，并在后续内容中使用备用服务。巴西葡萄牙语、菲律宾语和书面挪威语直接使用备用服务，以保留语言和地区差异。</p></div><div class="notice" style="margin-top:16px">${icon('shield')}<span>仅新增、原文变更或缺失目标语言的内容会发送给翻译服务；同项目中可复用的译文与人工修改会保留。重复原文按目标语言合并处理，MyMemory 额度耗尽时自动切换备用服务。</span></div></aside></div>${flowFooter('start-translation', plan.uniquePending ? '开始增量翻译' : '复用译文并校对', '', true, !locales.length).replace('class="workflow-footer"', 'class="workflow-footer language-flow-footer"')}`;
   }
   function progressData() {
     const job = sessionJob();
@@ -232,7 +244,7 @@
     const running = s.status === 'running';
     const quota = s.status === 'quota';
     const blocked = s.status === 'blocked';
-    const activeProvider = job?.activeItem?.provider || (state.settings.primaryCircuit.until > Date.now() ? 'ZTAITrans' : 'MyMemory');
+    const activeProvider = job?.activeItem?.provider || (window.LangPackLanguages.backupOnly.includes(job?.activeItem?.locale) || state.settings.primaryCircuit.until > Date.now() ? 'ZTAITrans' : 'MyMemory');
     const failed = (job?.items || []).filter(item => item.status === 'failed');
     const reused = (job?.items || []).filter(item => item.reused).length;
     const active = job?.activeItem;
@@ -243,7 +255,7 @@
       const count = items.filter(item => ['success', 'failed', 'skipped'].includes(item.status)).length;
       const errors = items.filter(item => item.status === 'failed').length;
       return `<div class="locale-progress-row"><span class="language-code ${l}">${lang(l).label}</span><span>${lang(l).name}</span><div class="mini-progress"><i style="width:${items.length ? count / items.length * 100 : 0}%"></i></div><span>${count} / ${items.length || selectedEntries().length}${errors ? ` · ${errors} 失败` : ''}</span></div>`;
-    }).join('')}</div>${active && running ? `<div class="active-translation" aria-live="polite"><span class="spinner"></span><span>${active.provider || activeProvider} · ${lang(active.locale).name} · ${esc(active.key || '')}${active.total ? ` · 分段 ${active.completed || 0} / ${active.total}` : ''}${active.retry ? ` · 第 ${active.retry.attempt} 次重试` : ''}</span></div>` : ''}${failed.length ? `<div class="translation-errors">${failed.slice(0, 8).map(item => `<div class="translation-error"><div class="grow"><strong>${esc(sessionEntries().find(e => e.id === item.entryId)?.key || item.entryId)} · ${lang(item.locale).name}</strong><p>${esc(item.error?.message || '翻译失败，请稍后重试。')}</p></div><button class="text-button" data-action="inspect-failed" data-entry-id="${esc(item.entryId)}" data-locale="${item.locale}">校对</button></div>`).join('')}${failed.length > 8 ? `<p class="caption">还有 ${failed.length - 8} 项，可在校对页查看。</p>` : ''}</div>` : ''}<div class="notice ${quota || blocked ? 'warning' : ''}">${icon('shield')}<span>${quota || blocked ? (job?.error?.message || '当前翻译服务不可用，请稍后重试；已完成结果会保留。') : 'MyMemory 额度耗尽时自动改用 ZTAITrans 重译完整原段。各服务的错误均不会写入译文；关闭页面后可重新打开并继续。'}</span></div><div class="translation-buttons">${running ? '<button class="btn ghost" data-action="pause-translation">暂停任务</button>' : real ? `${progress.failed || quota || blocked ? `<button class="btn primary" data-action="retry-failed">${icon('refresh')}重试失败与未完成项</button>` : ''}${progress.pending && !quota && !blocked ? `<button class="btn primary" data-action="resume-translation">${icon('refresh')}继续翻译</button>` : ''}<button class="btn ${finished && !progress.failed ? 'primary' : ''}" data-action="to-review">${finished ? '开始校对译文' : '校对已保存结果'}${icon('right')}</button>` : `<button class="btn primary" data-action="start-translation">使用 MyMemory 真实翻译${icon('right')}</button>`}</div></section>`;
+    }).join('')}</div>${active && running ? `<div class="active-translation" aria-live="polite"><span class="spinner"></span><span>${active.provider || activeProvider} · ${lang(active.locale).name} · ${esc(active.key || '')}${active.total ? ` · 分段 ${active.completed || 0} / ${active.total}` : ''}${active.retry ? ` · 第 ${active.retry.attempt} 次重试` : ''}</span></div>` : ''}${failed.length ? `<div class="translation-errors">${failed.slice(0, 8).map(item => `<div class="translation-error"><div class="grow"><strong>${esc(sessionEntries().find(e => e.id === item.entryId)?.key || item.entryId)} · ${lang(item.locale).name}</strong><p>${esc(item.error?.message || '翻译失败，请稍后重试。')}</p></div><button class="text-button" data-action="inspect-failed" data-entry-id="${esc(item.entryId)}" data-locale="${item.locale}">校对</button></div>`).join('')}${failed.length > 8 ? `<p class="caption">还有 ${failed.length - 8} 项，可在校对页查看。</p>` : ''}</div>` : ''}<div class="notice ${quota || blocked ? 'warning' : ''}">${icon('shield')}<span>${quota || blocked ? (job?.error?.message || '当前翻译服务不可用，请稍后重试；已完成结果会保留。') : 'MyMemory 额度耗尽时自动改用 ZTAITrans 重译完整原段。各服务的错误均不会写入译文；关闭页面后可重新打开并继续。'}</span></div><div class="translation-buttons">${running ? '<button class="btn ghost" data-action="pause-translation">暂停任务</button>' : real ? `${progress.failed || quota || blocked ? `<button class="btn primary" data-action="retry-failed">${icon('refresh')}重试失败与未完成项</button>` : ''}${progress.pending && !quota && !blocked ? `<button class="btn primary" data-action="resume-translation">${icon('refresh')}继续翻译</button>` : ''}<button class="btn ${finished && !progress.failed ? 'primary' : ''}" data-action="to-review">${finished ? '开始校对译文' : '校对已保存结果'}${icon('right')}</button>` : `<button class="btn primary" data-action="start-translation">增量翻译未完成项${icon('right')}</button>`}</div></section>`;
   }
   function commitSession(s = state.session) {
     if (!s) return;
@@ -270,9 +282,15 @@
     cancelSingle();
     let job = sessionJob();
     if (!resume || !isRealJob(job)) {
+      const locales = normalizeLocales(s.locales);
+      if (!locales.length) return toast('请选择有效的目标语言。');
+      const issues = E.validate(selectedEntries(), []).filter(issue => ['key', 'duplicate', 'source', 'empty'].includes(issue.type));
+      if (issues.length || selectedEntries().length > 1000) return toast(issues[0]?.message || '单次最多翻译 1000 条文案，请分批处理。');
+      s.locales = locales;
       s.entries = selectedEntries();
       job = J.createJob({ id: uid(), projectId: s.projectId, projectName: sessionProject().name, entries: s.entries, locales: [...s.locales], memoryEntries: sessionProject().entries });
       commitSession(s);
+      state.settings.recentLocales = [...s.locales];
       s.jobId = job.id;
       state.jobs.unshift(job);
     } else if (retry) J.retryFailed(job);
@@ -314,7 +332,7 @@
     const completed = entries.filter(e => textOf(e.translations[l]).trim()).length;
     const value = textOf(entry.translations[l]);
     const entryIssues = issues.filter(i => i.entryId === entry.id && (!i.locale || i.locale === l));
-    return workflowHeader(3, '让每一句，都恰如其分', '逐条检查与调整，译文和 key 都由你掌控。') + `<div class="review-toolbar"><div class="review-tabs">${s.locales.map(code => `<button class="review-tab ${code === l ? 'active' : ''}" data-action="review-locale" data-locale="${code}">${lang(code).name}<span class="mono" style="font-size:9px;opacity:.6">${lang(code).label}</span></button>`).join('')}</div><span class="badge ${completed === entries.length ? 'ok' : 'warn'}">${completed} / ${entries.length} 已有译文</span></div><div class="review-layout"><aside class="panel entry-list">${entries.map((e, i) => `<button class="entry-button ${i === state.reviewIndex ? 'active' : ''}" data-action="review-entry" data-index="${i}" aria-label="校对 ${esc(e.source)}"><span class="status-circle ${!textOf(e.translations[l]).trim() ? 'missing' : e.reviewed[l] ? 'complete' : ''}">${!textOf(e.translations[l]).trim() ? '!' : e.reviewed[l] ? '✓' : ''}</span><span class="grow"><span class="source-text">${esc(e.source)}</span><span class="mono">${esc(e.key)}</span></span></button>`).join('')}</aside><section class="panel review-card"><div class="panel-head"><h3>文案 ${String(state.reviewIndex + 1).padStart(2, '0')}</h3><span class="badge ${entry.reviewed[l] ? 'ok' : !value ? 'warn' : 'neutral'}">${translationLabel(entry, l)}</span></div><div class="panel-body"><div class="review-source-label"><span>ZH</span>简体中文 · 原文</div><div class="review-source">${esc(entry.source)}</div><div class="review-key"><label for="review-key">语义 key</label><input class="field" id="review-key" value="${esc(entry.key)}" spellcheck="false">${icon('key')}</div><div class="between"><label class="field-label" for="review-text" style="margin:0">${lang(l).name}译文 <span class="muted">${lang(l).native}</span></label><button class="text-button" data-action="retranslate" ${singleRequest?.entryId === entry.id && singleRequest?.locale === l ? 'disabled' : ''}>${icon('refresh')}${singleRequest?.entryId === entry.id && singleRequest?.locale === l ? '翻译中…' : '重译'}</button></div><textarea id="review-text" class="field review-field" placeholder="${value ? '' : '译文尚未生成，可在这里手动补充，或点击重译' }" spellcheck="false">${esc(value)}</textarea><div id="entry-errors" class="error-text" role="alert">${entryIssues.map(i => esc(i.message)).join('<br>')}</div><div class="review-actions"><label><input type="checkbox" id="review-confirm" ${entry.reviewed[l] ? 'checked' : ''} ${!value.trim() ? 'disabled' : ''}>我已检查并确认这条译文</label><button class="btn small-btn soft" data-action="save-review">${icon('check')}保存译文</button></div><div class="review-pagination"><button class="btn" data-action="review-prev" ${!state.reviewIndex ? 'disabled' : ''}>${icon('left')}上一条</button><span>${state.reviewIndex + 1} / ${entries.length}</span><button class="btn" data-action="review-next" ${state.reviewIndex >= entries.length - 1 ? 'disabled' : ''}>下一条${icon('right')}</button></div></div></section></div><div class="quality-bar ${issues.length ? 'warning' : ''}" id="quality-bar">${icon(issues.length ? 'alert' : 'shield')}<span>${issues.length ? `发现 ${issues.length} 项待处理问题，导出前需要检查。` : '完整性检查通过：key 唯一、译文齐全、占位符保持一致。'}</span><button class="text-button" data-action="show-issues">查看检查${icon('right')}</button></div>${flowFooter('to-export', '下一步：导出 JSON', '')}`;
+    return workflowHeader(3, '让每一句，都恰如其分', '逐条检查与调整，译文和 key 都由你掌控。') + `<div class="review-toolbar"><div class="review-tabs">${s.locales.map(code => `<button class="review-tab ${code === l ? 'active' : ''}" data-action="review-locale" data-locale="${code}">${lang(code).name}<span class="mono" style="font-size:9px;opacity:.6">${lang(code).label}</span></button>`).join('')}</div><span class="badge ${completed === entries.length ? 'ok' : 'warn'}">${completed} / ${entries.length} 已有译文</span></div><div class="review-layout"><aside class="panel entry-list">${entries.map((e, i) => `<button class="entry-button ${i === state.reviewIndex ? 'active' : ''}" data-action="review-entry" data-index="${i}" aria-label="校对 ${esc(e.source)}"><span class="status-circle ${!textOf(e.translations[l]).trim() ? 'missing' : e.reviewed[l] ? 'complete' : ''}">${!textOf(e.translations[l]).trim() ? '!' : e.reviewed[l] ? '✓' : ''}</span><span class="grow"><span class="source-text">${esc(e.source)}</span><span class="mono">${esc(e.key)}</span></span></button>`).join('')}</aside><section class="panel review-card"><div class="panel-head"><h3>文案 ${String(state.reviewIndex + 1).padStart(2, '0')}</h3><span class="badge ${entry.reviewed[l] ? 'ok' : !value ? 'warn' : 'neutral'}">${translationLabel(entry, l)}</span></div><div class="panel-body"><div class="review-source-label"><span>ZH</span>简体中文 · 原文</div><div class="review-source">${esc(entry.source)}</div><div class="review-key"><label for="review-key">语义 key</label><input class="field" id="review-key" value="${esc(entry.key)}" spellcheck="false">${icon('key')}</div><div class="between"><label class="field-label" for="review-text" style="margin:0">${lang(l).name}译文 <span class="muted">${lang(l).native}</span></label><button class="text-button" data-action="retranslate" ${singleRequest?.entryId === entry.id && singleRequest?.locale === l ? 'disabled' : ''}>${icon('refresh')}${singleRequest?.entryId === entry.id && singleRequest?.locale === l ? '翻译中…' : '重译'}</button></div><textarea id="review-text" class="field review-field" dir="auto" placeholder="${value ? '' : '译文尚未生成，可在这里手动补充，或点击重译' }" spellcheck="false">${esc(value)}</textarea><div id="entry-errors" class="error-text" role="alert">${entryIssues.map(i => esc(i.message)).join('<br>')}</div><div class="review-actions"><label><input type="checkbox" id="review-confirm" ${entry.reviewed[l] ? 'checked' : ''} ${!value.trim() ? 'disabled' : ''}>我已检查并确认这条译文</label><button class="btn small-btn soft" data-action="save-review">${icon('check')}保存译文</button></div><div class="review-pagination"><button class="btn" data-action="review-prev" ${!state.reviewIndex ? 'disabled' : ''}>${icon('left')}上一条</button><span>${state.reviewIndex + 1} / ${entries.length}</span><button class="btn" data-action="review-next" ${state.reviewIndex >= entries.length - 1 ? 'disabled' : ''}>下一条${icon('right')}</button></div></div></section></div><div class="quality-bar ${issues.length ? 'warning' : ''}" id="quality-bar">${icon(issues.length ? 'alert' : 'shield')}<span>${issues.length ? `发现 ${issues.length} 项待处理问题，导出前需要检查。` : '完整性检查通过：key 唯一、译文齐全、占位符保持一致。'}</span><button class="text-button" data-action="show-issues">查看检查${icon('right')}</button></div>${flowFooter('to-export', '下一步：导出 JSON', '')}`;
   }
   function saveReview(showToast = false) {
     const entry = currentReviewEntry();
@@ -427,7 +445,9 @@
     cancelSingle();
     const p = currentProject();
     if (!p.entries.length) return newSession('text');
-    state.session = { id: uid(), projectId: p.id, mode: 'project', entries: p.entries, locales: [...p.locales], status: 'completed', processed: p.entries.length * p.locales.length, committed: true, includeSource: state.settings.includeSource, pretty: state.settings.pretty, exportLocales: [...p.locales] };
+    const locales = view === 'languages' ? defaultLocales(p.locales) : [...p.locales];
+    if (view === 'languages') languageSearch = '';
+    state.session = { id: uid(), projectId: p.id, mode: 'project', entries: p.entries, locales, status: 'completed', processed: p.entries.length * p.locales.length, committed: true, includeSource: state.settings.includeSource, pretty: state.settings.pretty, exportLocales: [...locales] };
     state.reviewIndex = index; state.reviewLocale = p.locales[0]; nav(view);
   }
   function triggerDownload(data, name, type) {
@@ -509,8 +529,8 @@
         if (selectedEntries().some(e => used.has(e.key) && !currentProject().entries.some(p => p.id === e.id))) return toast('项目中已有同名 key，请先修改冲突名称。');
         nav('languages'); break;
       }
-      case 'toggle-all-languages': s.locales = s.locales.length === LANGS.length ? [] : LANGS.map(l => l.code); persist(); render(); break;
-      case 'remove-locale': s.locales = s.locales.filter(l => l !== button.dataset.locale); persist(); render(); break;
+      case 'toggle-all-languages': s.locales = normalizeLocales(s.locales).length === LANGS.length ? [] : LANGS.map(l => l.code); persist(); render(); break;
+      case 'remove-locale': s.locales = normalizeLocales(s.locales).filter(l => l !== button.dataset.locale); persist(); render(); break;
       case 'start-translation': startTranslation(); break;
       case 'resume-translation': startTranslation(true); break;
       case 'pause-translation': pauseTranslation(); break;
@@ -525,7 +545,7 @@
       case 'retranslate': {
         if (!saveReview()) break;
         const entry = currentReviewEntry();
-        if (entry.edited?.[state.reviewLocale]) { modal('替换你编辑过的译文？', '<p>将把这条原文重新发送给 MyMemory。成功后替换当前译文，失败时保留现有内容。</p>', '<button class="btn" data-action="close-modal">取消</button><button class="btn primary" data-action="confirm-retranslate">替换译文</button>'); }
+        if (entry.edited?.[state.reviewLocale]) { modal('替换你编辑过的译文？', '<p>将把这条原文重新发送给翻译服务。成功后替换当前译文，失败时保留现有内容。</p>', '<button class="btn" data-action="close-modal">取消</button><button class="btn primary" data-action="confirm-retranslate">替换译文</button>'); }
         else retranslateEntry(); break;
       }
       case 'confirm-retranslate': $('#modal').close(); retranslateEntry(); break;
@@ -620,6 +640,7 @@
     if (target.id === 'source-text') {
       s.text = target.value; updateInputEntries(); $('#key-preview').innerHTML = previewRows(); $('#source-count').textContent = `${s.text.length} 字符 · ${s.entries.length} 条文案`; $('#preview-count').textContent = `${s.entries.length} 条`; $('[data-action="to-languages"]').disabled = !s.entries.length;
     }
+    if (target.id === 'language-search') { languageSearch = target.value; $('#language-options').innerHTML = languageOptions(); $('#language-search-count').textContent = `${filteredLanguages().length} / ${LANGS.length} 种可选目标语言`; }
     if (target.id === 'context') { s.context = target.value; saveSoon(); }
     if (target.dataset.keyIndex !== undefined) { s.entries[+target.dataset.keyIndex].key = target.value; saveSoon(); }
     if (target.dataset.docSource !== undefined) { const entry = s.entries[+target.dataset.docSource]; if (entry.source !== target.value) { entry.source = target.value; entry.sourceVersion = (entry.sourceVersion || 1) + 1; entry.translations = {}; entry.reviewed = {}; entry.edited = {}; entry.translationMeta = {}; } saveSoon(); }
@@ -633,7 +654,7 @@
     const target = event.target, s = state.session;
     if (target.id === 'file-input') importFile(target.files[0]);
     if (target.name === 'split') { s.split = target.value; updateInputEntries(); persist(); render(); }
-    if (target.dataset.locale) { if (target.checked) s.locales.push(target.dataset.locale); else s.locales = s.locales.filter(l => l !== target.dataset.locale); persist(); render(); }
+    if (target.dataset.locale) { s.locales = normalizeLocales(target.checked ? [...s.locales, target.dataset.locale] : s.locales.filter(l => l !== target.dataset.locale)); persist(); render(); }
     if (target.dataset.docSelect !== undefined) { s.entries[+target.dataset.docSelect].selected = target.checked; persist(); render(); }
     if (target.dataset.exportLocale) { if (target.checked) s.exportLocales.push(target.dataset.exportLocale); else s.exportLocales = s.exportLocales.filter(l => l !== target.dataset.exportLocale); s.lastDownload = ''; persist(); render(); }
     if (target.id === 'include-source') { s.includeSource = target.checked; s.lastDownload = ''; persist(); render(); }

@@ -6,9 +6,11 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+import '../models.dart';
+
 /// Public LangPack proxy; the ZTAITrans credential stays in its hosted runtime.
 const defaultBackupServiceOrigin =
-    'https://langpack-studio-oct29.neonkrill256.chatgpt.site';
+    'https://langpack-standalone.406859116.workers.dev';
 
 /// Cancels queued work, active HTTP requests, retry waits and late responses.
 class CancelToken {
@@ -91,6 +93,30 @@ const _languageMap = {
   'de': 'de',
   'es': 'es',
   'zh-Hant': 'zh-TW',
+  'pt-PT': 'pt-PT',
+  'ms': 'ms',
+  'th': 'th',
+  'ar': 'ar',
+  'vi': 'vi',
+  'ru': 'ru',
+  'tr': 'tr',
+  'id': 'id',
+  'hi': 'hi',
+  'hu': 'hu',
+  'it': 'it',
+  'ro': 'ro',
+  'sv': 'sv',
+  'bg': 'bg',
+  'pl': 'pl',
+  'da': 'da',
+  'fi': 'fi',
+  'nl': 'nl',
+  'cs': 'cs',
+  'sk': 'sk',
+  'uk': 'uk',
+  'el': 'el',
+  'hr': 'hr',
+  'si': 'si-LK',
 };
 
 List<String> _matches(RegExp pattern, String text) =>
@@ -597,12 +623,12 @@ class TranslationService {
             '${match[1]}${await _primaryChunk(core, locale, email, run)}${match[3]}';
         final tail = output.toString();
         if (previousTranslated &&
-            ['en', 'fr', 'de', 'es', 'ko'].contains(locale) &&
+            !['zh-Hant', 'ja', 'th'].contains(locale) &&
             RegExp(
-              r'''[\p{L}\p{N}.!?;:)"']$''',
+              r'''[\p{L}\p{M}\p{N}.!?;:)"']$''',
               unicode: true,
             ).hasMatch(tail) &&
-            RegExp(r'^[\p{L}\p{N}]', unicode: true).hasMatch(text)) {
+            RegExp(r'^[\p{L}\p{M}\p{N}]', unicode: true).hasMatch(text)) {
           output.write(' ');
         }
         output.write(text);
@@ -772,7 +798,7 @@ class TranslationService {
     void Function(String)? onStatus,
   }) async {
     token.throwIfCancelled();
-    if (!_languageMap.containsKey(locale)) {
+    if (!supportedLanguages.any((language) => language.code == locale)) {
       throw const TranslationFailure('LANGUAGE', '不支持这个目标语言。');
     }
     email = email.trim();
@@ -794,7 +820,8 @@ class TranslationService {
     final run = _Run(token, onStatus, bypassCache);
     var provider = 'MyMemory';
     String text;
-    if (_circuitUntil != null && _circuitUntil!.isAfter(_now())) {
+    if (!_languageMap.containsKey(locale) ||
+        _circuitUntil != null && _circuitUntil!.isAfter(_now())) {
       provider = 'ZTAITrans';
       text = await _backup(source, locale, apiBaseUrl, run);
     } else {

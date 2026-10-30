@@ -54,6 +54,287 @@ void main() {
   });
 
   test(
+    'single retranslation cannot narrow a paused batch continuation',
+    () async {
+      controller.setLocales(['en', 'ja']);
+      final pausedTask = controller.startTranslation();
+      controller.pauseTranslation();
+      final single = controller.startTranslation(
+        entryId: project.entries.single.id,
+        locale: 'en',
+        overwrite: true,
+      );
+      translator.complete(1, 'Login');
+      await single;
+      translator.complete(0, 'Stale');
+      await pausedTask;
+      final resumed = controller.startTranslation(resume: true);
+      expect(translator.locales, ['en', 'en', 'ja']);
+      translator.complete(2, 'ログイン');
+      await resumed;
+      expect(project.jobs.first.locales, ['en', 'ja']);
+      expect(controller.settings.recentLocales, ['en', 'ja']);
+    },
+  );
+
+  test(
+    'single retranslation ignores invalid unrelated entries without changing recent targets',
+    () async {
+      controller.settings.recentLocales.add('fr');
+      controller.addBlocks([DocumentBlock('注册')]);
+      final other = project.entries.last;
+      other.key = 'INVALID';
+      controller.updateEntrySource(other, '');
+      final task = controller.startTranslation(
+        entryId: project.entries.first.id,
+        locale: 'en',
+        overwrite: true,
+      );
+      expect(translator.sources, ['登录']);
+      translator.complete(0, 'Sign in');
+      await task;
+      expect(controller.settings.recentLocales, ['fr']);
+      expect(project.entries.first.value('en').text, 'Sign in');
+      expect(other.translations, isEmpty);
+    },
+  );
+
+  test('recent language preference records only valid batch starts', () async {
+    expect(controller.settings.recentLocales, isEmpty);
+    controller.setLocales(['pt-BR', 'fil', 'pt-BR', 'zh-Hans', 'unknown']);
+    expect(project.locales, ['pt-BR', 'fil']);
+    expect(controller.settings.recentLocales, isEmpty);
+    final task = controller.startTranslation();
+    expect(controller.settings.recentLocales, ['pt-BR', 'fil']);
+    translator.complete(0, 'Entrar');
+    await Future<void>.delayed(Duration.zero);
+    translator.complete(1, 'Mag-log in');
+    await task;
+    await controller.saveSettings(
+      email: '',
+      apiBaseUrl: '',
+      includeSource: false,
+    );
+    expect(controller.settings.recentLocales, ['pt-BR', 'fil']);
+    controller.setLocales([]);
+    await controller.startTranslation();
+    expect(controller.settings.recentLocales, ['pt-BR', 'fil']);
+    controller.setLocales(['si']);
+    controller.selectEntry(project.entries.single, false);
+    await controller.startTranslation();
+    expect(controller.settings.recentLocales, ['pt-BR', 'fil']);
+    controller.selectEntry(project.entries.single, true);
+    controller.updateEntrySource(project.entries.single, '  ');
+    await controller.startTranslation();
+    expect(controller.settings.recentLocales, ['pt-BR', 'fil']);
+  });
+
+  test(
+    'draft language changes preserve history and started batches only translate the draft',
+    () async {
+      controller.setLocales(['en', 'ja']);
+      controller.settings.recentLocales.add('fr');
+      controller.applyRecentLocales();
+      expect(controller.batchLocales, ['fr']);
+      expect(project.locales, ['en', 'ja']);
+      controller.openProject(project.id);
+      expect(project.locales, ['en', 'ja']);
+      controller.applyRecentLocales();
+      final task = controller.startTranslation();
+      expect(translator.locales, ['fr']);
+      expect(project.locales, ['en', 'ja', 'fr']);
+      translator.complete(0, 'Connexion');
+      await task;
+      expect(project.jobs.first.locales, ['fr']);
+      expect(controller.settings.recentLocales, ['fr']);
+    },
+  );
+
+  test('paused task scope survives new drafts and persisted resume', () async {
+    controller.setLocales(['en', 'ja']);
+    controller.settings.recentLocales.add('fr');
+    controller.applyRecentLocales();
+    final first = controller.startTranslation();
+    controller.pauseTranslation();
+    controller.settings.recentLocales
+      ..clear()
+      ..add('si');
+    controller.applyRecentLocales();
+    expect(controller.batchLocales, ['si']);
+    final resumed = controller.startTranslation(resume: true);
+    expect(translator.locales, ['fr', 'fr']);
+    translator.complete(0, 'Stale');
+    await first;
+    translator.complete(1, 'Connexion');
+    await resumed;
+    expect(controller.settings.recentLocales, ['si']);
+    await controller.flush();
+    final restored = AppController(translator: ControlledTranslator());
+    await restored.initialize();
+    restored.openProject(project.id);
+    expect(restored.projects.single.jobs.first.locales, ['fr']);
+    await restored.startTranslation(resume: true);
+    expect(restored.settings.recentLocales, ['si']);
+    restored.dispose();
+  });
+
+  test(
+    'invalid or duplicate keys do not start a batch or record preferences',
+    () async {
+      controller.settings.recentLocales.add('fr');
+      final entry = project.entries.single;
+      entry.key = 'INVALID';
+      await controller.startTranslation();
+      expect(translator.requests, isEmpty);
+      expect(controller.settings.recentLocales, ['fr']);
+      entry.key = 'login';
+      controller.addBlocks([DocumentBlock('注册')]);
+      project.entries.last.key = 'login';
+      await controller.startTranslation();
+      expect(translator.requests, isEmpty);
+      expect(controller.settings.recentLocales, ['fr']);
+    },
+  );
+
+  test(
+    '34 targets export alongside source as 35 distinct resource files',
+    () async {
+      controller.setLocales(
+        supportedLanguages.map((language) => language.code).toList(),
+      );
+      for (final code in project.locales) {
+        controller.editTranslation(
+          project.entries.single,
+          code,
+          'Translated $code',
+        );
+      }
+      await controller.startTranslation();
+      final packages = controller.previewPackages();
+      expect(packages.length, 35);
+      expect(
+        packages.keys,
+        containsAll([
+          'zh-Hans.json',
+          'pt-BR.json',
+          'pt-PT.json',
+          'fil.json',
+          'nb.json',
+          'si.json',
+        ]),
+      );
+      expect(controller.settings.recentLocales.length, 34);
+      expect(translator.requests, isEmpty);
+    },
+  );
+
+  test(
+    'all retained zero-request batches save recent choice and survive restart',
+    () async {
+      controller.setLocales(['nb', 'si']);
+      for (final code in project.locales) {
+        controller.editTranslation(project.entries.single, code, 'Manual');
+      }
+      await controller.startTranslation();
+      expect(translator.requests, isEmpty);
+      expect(controller.settings.recentLocales, ['nb', 'si']);
+      await controller.flush();
+      final restored = AppController();
+      await restored.initialize();
+      expect(restored.settings.recentLocales, ['nb', 'si']);
+      final next = restored.createProject('最近选择');
+      expect(next.locales, ['nb', 'si']);
+      restored.openProject(project.id);
+      expect(restored.currentProject!.locales, ['nb', 'si']);
+      restored.dispose();
+    },
+  );
+
+  test(
+    'single retranslation retries and resumes preserve full recent choice',
+    () async {
+      controller.settings.recentLocales.addAll(['es', 'fr', 'pt-PT']);
+      final single = controller.startTranslation(
+        entryId: project.entries.single.id,
+        locale: 'en',
+        overwrite: true,
+      );
+      translator.complete(0, 'Login');
+      await single;
+      expect(controller.settings.recentLocales, ['es', 'fr', 'pt-PT']);
+      project.entries.single.value('en')
+        ..text = ''
+        ..status = TranslationStatus.failed;
+      final retry = controller.startTranslation(retryFailedOnly: true);
+      translator.complete(1, 'Login');
+      await retry;
+      expect(controller.settings.recentLocales, ['es', 'fr', 'pt-PT']);
+      project.entries.single.value('en')
+        ..text = ''
+        ..status = TranslationStatus.pending;
+      final resume = controller.startTranslation(resume: true);
+      translator.complete(2, 'Login');
+      await resume;
+      expect(controller.settings.recentLocales, ['es', 'fr', 'pt-PT']);
+    },
+  );
+
+  test(
+    'recent defaults apply explicitly while opening projects keeps history',
+    () {
+      controller.settings.recentLocales.addAll(['fil', 'nb']);
+      controller.openProject(project.id);
+      expect(project.locales, ['en']);
+      controller.applyRecentLocales();
+      expect(project.locales, ['en']);
+      expect(controller.batchLocales, ['fil', 'nb']);
+      controller.setLocales(['ja']);
+      final next = controller.createProject('New');
+      expect(next.locales, ['fil', 'nb']);
+      controller.openProject(project.id);
+      expect(project.locales, ['ja']);
+      expect(controller.settings.recentLocales, ['fil', 'nb']);
+    },
+  );
+
+  test(
+    'stored preferences filter source unknown duplicate and non-string values',
+    () {
+      expect(supportedLanguages.length, 34);
+      expect(
+        supportedLanguages.map((language) => language.code).toSet().length,
+        34,
+      );
+      expect(
+        supportedLanguages.any((language) => language.code == 'zh-Hans'),
+        isFalse,
+      );
+      final settings = AppSettings.fromJson({
+        'recentLocales': [
+          'zh-Hans',
+          'fil',
+          'fil',
+          'nb',
+          'xx',
+          1,
+          ' SI ',
+          'pt-br',
+        ],
+      });
+      expect(settings.recentLocales, ['fil', 'nb', 'si', 'pt-BR']);
+      expect(
+        AppSettings.fromJson({'recentLocales': 'invalid'}).recentLocales,
+        isEmpty,
+      );
+      final legacy = Project.fromJson({
+        'name': 'Legacy',
+        'locales': ['en', 'ja'],
+      });
+      expect(legacy.locales, ['en', 'ja']);
+    },
+  );
+
+  test(
     'source edits invalidate translations and reject late network results',
     () async {
       final entry = project.entries.single;

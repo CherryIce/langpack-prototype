@@ -1,10 +1,10 @@
 /* Browser translation chain. The authenticated backup key is held by the server only. */
 (function (root, factory) {
   'use strict';
-  const api = factory();
+  const api = factory(root.LangPackLanguages || (typeof module === 'object' && module.exports ? require('./languages.js') : null));
   root.TranslationService = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
-})(typeof window !== 'undefined' ? window : globalThis, function () {
+})(typeof window !== 'undefined' ? window : globalThis, function (languages) {
   'use strict';
   const PROVIDER = 'ZTAITrans';
   const placeholderPattern = () => /\{\{\s*[\w.]+\s*\}\}|\{[\w.]+\}|%(?:\d+\$)?[-+#0 ']*(?:\d+|\*)?(?:\.(?:\d+|\*))?[sdif@uoxXegGc]|%%/g;
@@ -141,7 +141,7 @@
     async function translate(value, locale, options = {}) {
       const source = String(value ?? '');
       checkAbort(options.signal);
-      if (!/^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/.test(String(locale || ''))) throw failure('LANGUAGE', '目标语言标识不正确。');
+      if (!languages.targets.some(language => language.code === locale)) throw failure('LANGUAGE', '不支持这个目标语言。');
       if (!source.trim()) return { text: source, provider: PROVIDER, cached: true, requestCount: 0 };
       const key = locale + '\0' + source;
       if (!options.bypassCache && cache.has(key)) {
@@ -194,6 +194,8 @@
     }
     async function translate(source, locale, options = {}) {
       checkAbort(options.signal);
+      if (!languages.targets.some(language => language.code === locale)) throw failure('LANGUAGE', '不支持这个目标语言。');
+      if (languages.backupOnly.includes(locale)) return fromBackup(source, locale, options);
       if (Number(circuit.until) > now()) return fromBackup(source, locale, options);
       try {
         const result = await withAbort(primary.translate(source, locale, callbacks(options, 'MyMemory')), options.signal);

@@ -234,3 +234,28 @@ test('cache is bounded and bypassCache performs a fresh request', async () => {
   assert.equal((await client.translate('第一条', 'en')).cached, true);
   assert.equal((await client.translate('第一条', 'en', { bypassCache: true })).cached, false);
 });
+
+test('every supported primary language uses its exact adapter code; fixed source and backup-only variants never request MyMemory', async () => {
+  const Languages = require('../web/languages.js');
+  const calls = [];
+  const client = M.createClient(options({ fetchImpl: async url => { calls.push(new URL(url).searchParams.get('langpair')); return response('translated'); } }));
+  for (const [code, target] of Object.entries(Languages.primaryMap)) {
+    await client.translate('登录', code);
+    assert.equal(calls.at(-1), 'zh-CN|' + target);
+  }
+  assert.equal(calls.length, 31);
+  for (const code of ['zh-Hans', 'pt-BR', 'fil', 'nb', 'xx', 'toString']) await assert.rejects(client.translate('登录', code), { code: 'LANGUAGE' });
+  assert.equal(calls.length, 31);
+});
+
+test('expanded word-based target scripts keep a separator at chunk boundaries including combining marks', async () => {
+  const source = '文'.repeat(200);
+  for (const [locale, text] of [['pt-PT', 'palavra'], ['ru', 'слово'], ['ar', 'كلمة'], ['hi', 'हिन्दी'], ['si', 'සිංහල']]) {
+    const client = M.createClient(options({ fetchImpl: async () => response(text) }));
+    assert.equal((await client.translate(source, locale)).text, text + ' ' + text);
+  }
+  for (const [locale, text] of [['zh-Hant', '譯文'], ['ja', '翻訳'], ['th', 'คำ']]) {
+    const client = M.createClient(options({ fetchImpl: async () => response(text) }));
+    assert.equal((await client.translate(source, locale)).text, text + text);
+  }
+});

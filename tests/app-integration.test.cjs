@@ -32,7 +32,13 @@ function boot(saved, translate = async () => { throw new Error('Unexpected trans
   const handlers = new Map(), errors = [], elements = new Map();
   let html = '';
   function element(id) {
-    if (!elements.has(id)) elements.set(id, { id, dataset: {}, innerHTML: '', textContent: '', value: '', open: false, disabled: false, classList: { add() {}, remove() {} }, addEventListener() {}, focus() {}, close() { this.open = false; }, showModal() { this.open = true; }, getBoundingClientRect() { return { left: 0, right: 400, top: 0, bottom: 400 }; } });
+    if (!elements.has(id)) elements.set(id, { id, dataset: {}, innerHTML: '', textContent: '', value: '', open: false, disabled: false,
+      get validity() {
+        // Model the email input's native type check; the app separately requires a dotted domain.
+        const typeMismatch = this.id === 'translation-email' && this.value !== '' && !/^[^\s@]+@[^\s@]+$/.test(this.value);
+        return { valid: !typeMismatch, typeMismatch, valueMissing: false };
+      },
+      classList: { add() {}, remove() {} }, addEventListener() {}, focus() {}, close() { this.open = false; }, showModal() { this.open = true; }, getBoundingClientRect() { return { left: 0, right: 400, top: 0, bottom: 400 }; } });
     return elements.get(id);
   }
   const app = element('app');
@@ -42,7 +48,7 @@ function boot(saved, translate = async () => { throw new Error('Unexpected trans
     querySelector(selector) {
       if (selector[0] !== '#') return null;
       const id = selector.slice(1);
-      if (['app', 'toast', 'modal'].includes(id) || html.includes('id="' + id + '"')) return element(id);
+      if (['app', 'toast', 'modal'].includes(id) || html.includes('id="' + id + '"') || [...elements.values()].some(value => value.innerHTML.includes('id="' + id + '"'))) return element(id);
       return null;
     },
     addEventListener(type, handler) { if (!handlers.has(type)) handlers.set(type, []); handlers.get(type).push(handler); }
@@ -56,6 +62,7 @@ function boot(saved, translate = async () => { throw new Error('Unexpected trans
     clearTimeout(timer) { timers.delete(timer); clearTimeout(timer); }
   });
   context.window = context; context.addEventListener = () => {}; context.scrollTo = () => {};
+  vm.runInContext(code('languages.js'), context);
   vm.runInContext(code('engine.js'), context);
   vm.runInContext(code('translation-jobs.js'), context);
   context.MyMemoryTranslator = { createClient: () => ({ translate }), utf8Length: value => new TextEncoder().encode(value).length };
@@ -71,6 +78,8 @@ function boot(saved, translate = async () => { throw new Error('Unexpected trans
     },
     field(id, value) { const target = document.querySelector('#' + id); assert.ok(target, 'Visible field ' + id); target.value = value; return target; },
     async input(id, value) { const target = this.field(id, value); for (const handler of handlers.get('input') || []) await handler({ target }); },
+    async change(target) { for (const handler of handlers.get('change') || []) await handler({ target }); },
+    content(id) { return element(id).innerHTML; },
     async editDocumentSource(index, value) { const target = { value, dataset: { docSource: String(index) } }; for (const handler of handlers.get('input') || []) await handler({ target }); },
     close() { for (const timer of timers) clearTimeout(timer); },
     engine: context.LangPackEngine
@@ -283,7 +292,7 @@ test('the actual app plans reimports incrementally, persists reused results and 
   assert.equal(state.session.entries[0].reviewed.en, false);
   assert.equal(state.jobs[0].items.filter(item => item.reused).length, 3);
   assert.match(app.html(), /复用 3/);
-  state.session.entries = [makeEntry('another-copy')]; state.session.locales = ['en']; state.view = 'languages'; state.session.status = 'draft'; delete state.session.jobId;
+  state.session.entries = [makeEntry('another_copy')]; state.session.locales = ['en']; state.view = 'languages'; state.session.status = 'draft'; delete state.session.jobId;
   const reopened = boot(state); t.after(() => reopened.close());
   assert.match(reopened.html(), /复用译文并校对/);
   await reopened.click('start-translation'); await until(() => reopened.state().session.status === 'completed');
@@ -331,4 +340,159 @@ test('explicit single retranslation continues to bypass caches when an increment
   await app.click('retranslate'); await until(() => app.state().session.entries[0].translations.en === 'Sign in');
   assert.equal(calls, 1);
   assert.equal(app.state().session.entries[0].translationMeta.en.sourceVersion, 1);
+});
+
+test('language picker exposes 34 searchable targets, retains hidden selections and excludes the fixed source', async t => {
+  const app = boot(fixture(['en'])); t.after(() => app.close());
+  assert.equal((app.html().match(/data-locale="[^"]+"[^>]*aria-label="选择/g) || []).length, 34);
+  assert.doesNotMatch(app.html(), /data-locale="zh-Hans"/);
+  assert.match(app.html(), /35 种语言覆盖/); assert.match(app.html(), /34 种目标语言可选/);
+  await app.input('language-search', 'pt-');
+  assert.match(app.content('language-options'), /data-locale="pt-BR"/);
+  assert.match(app.content('language-options'), /data-locale="pt-PT"/);
+  assert.doesNotMatch(app.content('language-options'), /data-locale="en"/);
+  assert.deepEqual(app.state().session.locales, ['en']);
+  await app.change({ dataset: { locale: 'pt-BR' }, checked: true });
+  assert.deepEqual(app.state().session.locales, ['en', 'pt-BR']);
+  await app.input('language-search', 'සිංහල');
+  assert.match(app.content('language-options'), /data-locale="si"/);
+  await app.input('language-search', '不存在的语言');
+  assert.match(app.content('language-options'), /没有找到匹配的语言/);
+  assert.deepEqual(app.state().session.locales, ['en', 'pt-BR']);
+  await app.click('toggle-all-languages');
+  assert.equal(app.state().session.locales.length, 34);
+  assert.equal(app.state().session.locales.includes('zh-Hans'), false);
+  assert.deepEqual(app.state().settings.recentLocales, []);
+});
+
+test('selection changes alone do not change recent languages, and abandoned drafts retain the prior default', async t => {
+  const saved = fixture(['en', 'ja']); saved.settings.recentLocales = ['pt-PT', 'ru'];
+  const app = boot(saved); t.after(() => app.close());
+  await app.change({ dataset: { locale: 'si' }, checked: true });
+  await app.change({ dataset: { locale: 'ja' }, checked: false });
+  assert.deepEqual(app.state().session.locales, ['en', 'si']);
+  assert.deepEqual(app.state().settings.recentLocales, ['pt-PT', 'ru']);
+  await app.click('project', { id: 'a' }); await app.click('add-content');
+  assert.deepEqual(app.state().session.locales, ['pt-PT', 'ru']);
+  await app.click('project', { id: 'a' }); await app.click('add-document');
+  assert.deepEqual(app.state().session.locales, ['pt-PT', 'ru']);
+  await app.click('project', { id: 'a' }); await app.click('translate-project');
+  assert.deepEqual(app.state().session.locales, ['pt-PT', 'ru']);
+  assert.deepEqual(app.state().projects[0].locales, ['en', 'ja']);
+  await app.click('project', { id: 'a' }); await app.click('review-project');
+  assert.deepEqual(app.state().session.locales, ['en', 'ja']);
+  app.field('review-key', 'key_one'); app.field('review-text', '');
+  await app.click('project', { id: 'a' }); await app.click('export-project');
+  assert.deepEqual(app.state().session.locales, ['en', 'ja']);
+  assert.deepEqual(app.state().session.exportLocales, ['en', 'ja']);
+});
+
+test('valid new batch records normalized recent targets, persists on reload and defaults a newly created project', async t => {
+  const saved = fixture(['en', 'en', 'unknown', 'zh-Hans', 'pt-br', 'si']);
+  const calls = [];
+  const app = boot(saved, async (source, locale) => { calls.push(['primary', locale]); return { text: locale + ' result', provider: 'MyMemory' }; }, {
+    backupTranslate: async (source, locale) => { calls.push(['backup', locale]); return { text: locale + ' result', provider: 'ZTAITrans' }; }
+  }); t.after(() => app.close());
+  await app.click('start-translation'); await until(() => app.state().session.status === 'completed');
+  assert.deepEqual(calls, [['primary', 'en'], ['backup', 'pt-BR'], ['primary', 'si']]);
+  assert.deepEqual(app.state().settings.recentLocales, ['en', 'pt-BR', 'si']);
+  assert.equal(app.state().session.entries[0].translationMeta['pt-BR'].provider, 'ZTAITrans');
+  assert.equal(app.state().settings.primaryCircuit.until, 0);
+  assert.equal(app.state().settings.lastFallback, undefined);
+  const reopened = boot(app.state()); t.after(() => reopened.close());
+  await reopened.click('project', { id: 'b' }); await reopened.click('add-content');
+  assert.deepEqual(reopened.state().session.locales, ['en', 'pt-BR', 'si']);
+  await reopened.click('new-project'); reopened.field('project-name', '新偏好项目'); reopened.field('project-description', ''); await reopened.click('create-project');
+  assert.equal(reopened.state().projects.at(-1).name, '新偏好项目');
+  assert.deepEqual(reopened.state().session.locales, ['en', 'pt-BR', 'si']);
+});
+
+test('a fully reused zero-request batch still records the languages the user actually started', async t => {
+  const saved = fixture(['pt-PT', 'si']); saved.settings.recentLocales = ['en'];
+  for (const row of [saved.projects[0].entries[0], saved.session.entries[0]]) for (const locale of ['pt-PT', 'si']) {
+    row.translations[locale] = locale + ' existing'; row.translationMeta ||= {}; row.translationMeta[locale] = { provider: 'MyMemory', status: 'success', sourceText: row.source, sourceVersion: 1 };
+  }
+  const app = boot(saved); t.after(() => app.close());
+  await app.click('start-translation'); await until(() => app.state().session.status === 'completed');
+  assert.deepEqual(app.state().settings.recentLocales, ['pt-PT', 'si']);
+  assert.equal(app.state().jobs[0].items.every(item => item.reused), true);
+});
+
+test('invalid starts cannot erase the recent preference and no-preference drafts retain their old fallback', async t => {
+  for (const locales of [[], ['xx', 'zh-Hans']]) {
+    const saved = fixture(locales); saved.settings.recentLocales = ['ru', 'en'];
+    const app = boot(saved); t.after(() => app.close()); await app.click('start-translation');
+    assert.deepEqual(app.state().settings.recentLocales, ['ru', 'en']); assert.equal(app.state().jobs.length, 0);
+  }
+  const saved = fixture(['si']); saved.settings.recentLocales = ['xx', 'zh-Hans'];
+  const fallback = boot(saved); t.after(() => fallback.close());
+  await fallback.click('project', { id: 'a' }); await fallback.click('add-content');
+  assert.deepEqual(fallback.state().session.locales, ['si']);
+  await fallback.click('new-project'); fallback.field('project-name', '默认项目'); fallback.field('project-description', ''); await fallback.click('create-project');
+  assert.deepEqual(fallback.state().session.locales, ['en', 'ja', 'ko']);
+});
+
+test('resume and failed retry retain their old language snapshots without narrowing recent preferences', async t => {
+  const Jobs = require('../web/translation-jobs.js');
+  for (const action of ['resume-translation', 'retry-failed']) await t.test(action, async () => {
+    const saved = fixture(['en']); saved.settings.recentLocales = ['pt-PT', 'ru', 'si']; saved.view = 'translate';
+    const job = Jobs.createJob({ id: 'old', projectId: 'a', projectName: '旧任务', entries: saved.session.entries, locales: ['en'] });
+    job.status = 'paused'; if (action === 'retry-failed') job.items[0].status = 'failed';
+    saved.jobs = [job]; saved.session.jobId = job.id; saved.session.status = 'paused';
+    const app = boot(saved, async () => ({ text: 'Log in', provider: 'MyMemory' })); t.after(() => app.close());
+    await app.click(action); await until(() => app.state().session.status === 'completed');
+    assert.deepEqual(app.state().settings.recentLocales, ['pt-PT', 'ru', 'si']);
+    assert.deepEqual(app.state().session.locales, ['en']); assert.deepEqual(app.state().jobs[0].locales, ['en']);
+  });
+});
+
+test('review, export, reopening old jobs and saving settings preserve preference and historic translations', async t => {
+  const Jobs = require('../web/translation-jobs.js');
+  const saved = fixture(['en', 'ja']); saved.settings.recentLocales = ['SI', 'pt-br', 'SI', 'xx', 'zh-Hans']; saved.view = 'project';
+  const row = saved.projects[0].entries[0];
+  row.translations = { en: 'Manual English', ja: '手動日本語' }; row.edited = { en: true, ja: true }; row.reviewed = { en: true, ja: true };
+  saved.jobs = [Jobs.createJob({ id: 'historic', projectId: 'a', projectName: '旧任务', entries: [clone(row)], locales: ['ja'] })]; saved.jobs[0].status = 'completed';
+  const app = boot(saved); t.after(() => app.close());
+  const expected = ['si', 'pt-BR'];
+  assert.deepEqual(app.state().settings.recentLocales, expected);
+  await app.click('review-project'); assert.deepEqual(app.state().session.locales, ['en', 'ja']);
+  app.field('review-key', 'key_one'); app.field('review-text', 'Manual English');
+  await app.click('project', { id: 'a' }); await app.click('export-project');
+  assert.deepEqual(app.state().session.locales, ['en', 'ja']); assert.deepEqual(app.state().session.exportLocales, ['en', 'ja']);
+  await app.click('open-job', { id: 'historic' }); assert.deepEqual(app.state().session.locales, ['ja']);
+  await app.click('nav', { view: 'settings' });
+  assert.equal(app.field('translation-email', 'invalid-email').validity.valid, false);
+  await app.click('save-translation-settings');
+  assert.equal(app.state().settings.translationEmail, '');
+  assert.equal(app.field('translation-email', 'owner@example.com').validity.valid, true);
+  await app.click('save-translation-settings');
+  assert.equal(app.state().settings.translationEmail, 'owner@example.com');
+  assert.deepEqual(app.state().settings.recentLocales, expected);
+  assert.deepEqual(app.state().projects[0].entries[0].translations, row.translations);
+});
+
+test('single retranslation leaves a broader recent target preference intact', async t => {
+  const saved = fixture(['en']); saved.settings.recentLocales = ['ru', 'pt-PT', 'si']; saved.view = 'review'; saved.session.status = 'completed';
+  const row = saved.session.entries[0]; row.translations.en = 'Existing'; row.translationMeta = { en: { provider: 'MyMemory', status: 'success', sourceText: row.source } };
+  const app = boot(saved, async () => ({ text: 'Refreshed', provider: 'MyMemory' })); t.after(() => app.close());
+  app.field('review-key', 'key_one'); app.field('review-text', 'Existing');
+  await app.click('retranslate'); await until(() => app.state().session.entries[0].translations.en === 'Refreshed');
+  assert.deepEqual(app.state().settings.recentLocales, ['ru', 'pt-PT', 'si']);
+});
+
+test('selecting all produces 34 genuine pipeline results and 35 canonical language files without source-to-source requests', async t => {
+  const calls = [];
+  const app = boot(fixture(['en']), async (source, locale) => { calls.push(['primary', locale]); return { text: locale + ' result', provider: 'MyMemory' }; }, {
+    backupTranslate: async (source, locale) => { calls.push(['backup', locale]); return { text: locale + ' result', provider: 'ZTAITrans' }; }
+  }); t.after(() => app.close());
+  await app.click('toggle-all-languages'); await app.click('start-translation'); await until(() => app.state().session.status === 'completed');
+  const state = app.state();
+  assert.equal(calls.length, 34); assert.equal(calls.filter(([provider]) => provider === 'primary').length, 31);
+  assert.deepEqual(calls.filter(([provider]) => provider === 'backup').map(([, locale]) => locale), ['pt-BR', 'fil', 'nb']);
+  assert.equal(calls.some(([, locale]) => locale === 'zh-Hans'), false);
+  assert.equal(state.jobs[0].success, 34); assert.equal(state.settings.recentLocales.length, 34);
+  const files = app.engine.makePackages(state.session.entries, state.session.locales, true);
+  assert.equal(Object.keys(files).length, 35);
+  for (const locale of ['pt-BR', 'pt-PT', 'fil', 'nb', 'si']) assert.equal(JSON.parse(files[locale + '.json']).key_one, locale + ' result');
+  assert.equal(state.settings.primaryCircuit.until, 0); assert.equal(state.settings.lastFallback, undefined);
 });

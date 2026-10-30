@@ -1,13 +1,13 @@
 /* MyMemory REST adapter. No credentials, demo translations or public-memory writes. */
 (function (root, factory) {
   'use strict';
-  const api = factory();
+  const api = factory(root.LangPackLanguages || (typeof module === 'object' && module.exports ? require('./languages.js') : null));
   root.MyMemoryTranslator = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
-})(typeof window !== 'undefined' ? window : globalThis, function () {
+})(typeof window !== 'undefined' ? window : globalThis, function (languages) {
   'use strict';
   const ENDPOINT = 'https://api.mymemory.translated.net/get';
-  const LANGUAGES = Object.freeze({ en: 'en', ja: 'ja', ko: 'ko', fr: 'fr', de: 'de', es: 'es', 'zh-Hant': 'zh-TW' });
+  const LANGUAGES = languages.primaryMap;
   const encoder = new TextEncoder();
   const placeholderPattern = () => /\{\{\s*[\w.]+\s*\}\}|\{[\w.]+\}|%(?:\d+\$)?[-+#0 ']*(?:\d+|\*)?(?:\.(?:\d+|\*))?[sdif@uoxXegGc]|%%/g;
   const utf8Length = text => encoder.encode(String(text)).length;
@@ -212,7 +212,7 @@
     async function translate(value, locale, translationOptions = {}) {
       const source = String(value ?? '');
       throwIfAborted(translationOptions.signal);
-      if (!LANGUAGES[locale]) throw error('LANGUAGE', '不支持这个目标语言。');
+      if (!Object.hasOwn(LANGUAGES, locale)) throw error('LANGUAGE', '不支持这个目标语言。');
       if (!source.trim()) return { text: source, provider: 'MyMemory', cached: true, requestCount: 0 };
       const protectedSource = protect(source);
       const parts = [];
@@ -239,7 +239,7 @@
           const piece = part.prefix + translated + part.suffix;
           const tail = output[output.length - 1] || '';
           // Adjacent Chinese chunks have no source space. Word-based target scripts need one.
-          const separator = previousWasTranslated && ['en', 'fr', 'de', 'es', 'ko'].includes(locale) && /[\p{L}\p{N}.!?;:)"']$/u.test(tail) && /^[\p{L}\p{N}]/u.test(piece) ? ' ' : '';
+          const separator = previousWasTranslated && languages.wordSpaced.includes(locale) && /[\p{L}\p{M}\p{N}.!?;:)"']$/u.test(tail) && /^[\p{L}\p{M}\p{N}]/u.test(piece) ? ' ' : '';
           output.push(separator + piece);
           previousWasTranslated = true;
           context.chunkIndex++;

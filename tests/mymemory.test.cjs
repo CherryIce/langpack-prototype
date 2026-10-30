@@ -135,6 +135,58 @@ test('quotaFinished on an HTTP 200 response also halts without retry', async () 
   assert.equal(client.getUsage().requestCount, 1);
 });
 
+test('successful business translations containing quota phrases remain usable and cacheable', async t => {
+  for (const text of ['Next available in 10 minutes', 'Out of quota', 'Daily quota reached', 'Quota exceeded', 'Free quota exhausted', 'Daily translation limit reached', 'You used all available free translations', 'Quota has been exhausted']) {
+    await t.test(text, async () => {
+      let calls = 0;
+      const client = M.createClient(options({ fetchImpl: async () => { calls++; return response(text, { status: 200, serviceStatus: 200, quotaFinished: false, details: '' }); } }));
+      assert.equal((await client.translate('状态提示', 'en')).text, text);
+      assert.equal((await client.translate('状态提示', 'en')).cached, true);
+      assert.equal(calls, 1);
+      assert.equal(client.getUsage().cacheEntries, 1);
+    });
+  }
+});
+
+test('trusted quota flags, service diagnostics and prefixed warnings still halt on HTTP 200 without retry', async t => {
+  const warning = 'MYMEMORY WARNING: YOU USED ALL AVAILABLE FREE TRANSLATIONS FOR TODAY. NEXT AVAILABLE IN 01 HOURS 16 MINUTES 50 SECONDS';
+  for (const [name, text, fields] of [
+    ['boolean quota flag', 'Log in', { quotaFinished: true }],
+    ['string quota flag', 'Log in', { quotaFinished: 'true' }],
+    ['numeric quota flag', 'Log in', { quotaFinished: 1 }],
+    ['service diagnostic', 'Log in', { details: 'Daily quota reached', quotaFinished: false }],
+    ['provider warning in translated field', warning, { details: '', quotaFinished: false }],
+    ['leading whitespace and case-compatible warning prefix', ' \n mymemory warning: Out of quota', { details: '', quotaFinished: false }]
+  ]) await t.test(name, async () => {
+    let calls = 0;
+    const client = M.createClient(options({ fetchImpl: async () => { calls++; return response(text, { status: 200, serviceStatus: 200, ...fields }); } }));
+    await assert.rejects(client.translate('登录', 'en'), { code: 'QUOTA', quota: true, retryable: false });
+    assert.equal(calls, 1); assert.equal(client.getUsage().cacheEntries, 0);
+  });
+});
+
+test('ordinary rate limits with quota-like candidate text keep bounded retries rather than becoming exhausted quota', async () => {
+  let calls = 0;
+  const delays = [];
+  const client = M.createClient(options({ maxRetries: 1, sleep: async ms => delays.push(ms), fetchImpl: async () => { calls++; return response('Next available in 10 minutes', { status: 429, serviceStatus: 429, details: 'Too many requests', retryAfter: '0.05' }); } }));
+  await assert.rejects(client.translate('登录', 'en'), { code: 'RATE_LIMIT', retryable: true, quota: false });
+  assert.equal(calls, 2); assert.deepEqual(delays, [50]); assert.equal(client.getUsage().cacheEntries, 0);
+});
+
+test('unrelated provider warnings and malformed payloads do not become quota or cached translations', async t => {
+  const cases = [
+    ['ordinary provider warning', () => response('MYMEMORY WARNING: PLEASE SELECT TWO DISTINCT LANGUAGES'), 'RESPONSE'],
+    ['unprefixed failure candidate', () => response('Out of quota', { status: 400, serviceStatus: 400 }), 'REQUEST'],
+    ['null payload', () => ({ ok: true, status: 200, json: async () => null }), 'RESPONSE'],
+    ['invalid quota metadata type', () => ({ ok: true, status: 200, json: async () => ({ responseStatus: 200, quotaFinished: { value: true }, responseDetails: { message: 'Out of quota' }, responseData: { translatedText: '' } }) }), 'EMPTY']
+  ];
+  for (const [name, fetchImpl, code] of cases) await t.test(name, async () => {
+    const client = M.createClient(options({ maxRetries: 0, fetchImpl }));
+    await assert.rejects(client.translate('登录', 'en'), { code, quota: false });
+    assert.equal(client.getUsage().requestCount, 1); assert.equal(client.getUsage().cacheEntries, 0);
+  });
+});
+
 test('long Retry-After is surfaced rather than silently shortened or waited on', async () => {
   let calls = 0;
   const client = M.createClient(options({ fetchImpl: async () => { calls++; return response('', { status: 429, retryAfter: '90' }); } }));

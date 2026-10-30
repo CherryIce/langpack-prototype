@@ -46,6 +46,145 @@ Matcher failure(String code, {bool? fatal, bool? isQuota}) =>
         );
 
 void main() {
+  for (final candidate in [
+    'Next available in 10 minutes.',
+    'Out of quota. Please update your subscription.',
+    'Quota exceeded notifications can be configured.',
+    'Free quota exhausted messages appear on this screen.',
+  ]) {
+    test(
+      'successful primary quota business text stays primary: $candidate',
+      () async {
+        final methods = <String>[];
+        var primaryCalls = 0;
+        final statuses = <String>[];
+        final service = TranslationService(
+          client: MockClient((request) async {
+            methods.add(request.method);
+            if (request.method == 'POST') return backup('Unnecessary backup');
+            primaryCalls++;
+            return http.Response(
+              jsonEncode({
+                'responseStatus': 200,
+                'quotaFinished': false,
+                'responseDetails': '',
+                'responseData': {
+                  'translatedText': primaryCalls == 1 ? candidate : 'Ready',
+                },
+              }),
+              200,
+            );
+          }),
+          minInterval: Duration.zero,
+        );
+        addTearDown(service.dispose);
+        final first = await service.translate(
+          '额度提示文案',
+          'en',
+          token: CancelToken(),
+          apiBaseUrl: 'https://backup.example',
+          onStatus: statuses.add,
+        );
+        final second = await service.translate(
+          '继续翻译',
+          'en',
+          token: CancelToken(),
+          apiBaseUrl: 'https://backup.example',
+          onStatus: statuses.add,
+        );
+        expect(first.text, candidate);
+        expect(first.provider, 'MyMemory');
+        expect(second.text, 'Ready');
+        expect(second.provider, 'MyMemory');
+        expect(methods, ['GET', 'GET']);
+        expect(statuses.any((status) => status.contains('额度已用尽')), isFalse);
+      },
+    );
+  }
+
+  for (final payload in [
+    {'quotaFinished': true, 'responseDetails': '', 'candidate': 'Login'},
+    {'quotaFinished': 'true', 'responseDetails': '', 'candidate': 'Login'},
+    {'quotaFinished': 1, 'responseDetails': '', 'candidate': 'Login'},
+    {
+      'quotaFinished': false,
+      'responseDetails':
+          'YOU USED ALL AVAILABLE FREE TRANSLATIONS. NEXT AVAILABLE IN 10 HOURS',
+      'candidate': 'Login',
+    },
+    {
+      'quotaFinished': false,
+      'responseDetails': '',
+      'candidate':
+          'MYMEMORY WARNING: YOU USED ALL AVAILABLE FREE TRANSLATIONS. NEXT AVAILABLE IN 10 HOURS',
+    },
+  ]) {
+    test(
+      'HTTP 200 explicit provider quota signal still falls back: $payload',
+      () async {
+        final methods = <String>[];
+        final service = TranslationService(
+          client: MockClient((request) async {
+            methods.add(request.method);
+            return request.method == 'POST'
+                ? backup('Sign in')
+                : http.Response(
+                    jsonEncode({
+                      'responseStatus': 200,
+                      'quotaFinished': payload['quotaFinished'],
+                      'responseDetails': payload['responseDetails'],
+                      'responseData': {'translatedText': payload['candidate']},
+                    }),
+                    200,
+                  );
+          }),
+          minInterval: Duration.zero,
+        );
+        addTearDown(service.dispose);
+        final result = await service.translate(
+          '登录',
+          'en',
+          token: CancelToken(),
+          apiBaseUrl: 'https://backup.example',
+        );
+        expect(result.text, 'Sign in');
+        expect(result.provider, 'ZTAITrans');
+        expect(methods, ['GET', 'POST']);
+      },
+    );
+  }
+
+  test('ordinary HTTP 429 rate limit does not switch to backup', () async {
+    final methods = <String>[];
+    final service = TranslationService(
+      client: MockClient((request) async {
+        methods.add(request.method);
+        return http.Response(
+          jsonEncode({
+            'responseStatus': 429,
+            'quotaFinished': false,
+            'responseDetails': 'Too many requests, slow down',
+            'responseData': {'translatedText': 'Out of quota'},
+          }),
+          429,
+        );
+      }),
+      minInterval: Duration.zero,
+      maxRetries: 0,
+    );
+    addTearDown(service.dispose);
+    await expectLater(
+      service.translate(
+        '登录',
+        'en',
+        token: CancelToken(),
+        apiBaseUrl: 'https://backup.example',
+      ),
+      throwsA(failure('RATE_LIMIT', isQuota: false)),
+    );
+    expect(methods, ['GET']);
+  });
+
   test(
     'all 34 canonical targets route without changing language semantics',
     () async {

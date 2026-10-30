@@ -166,7 +166,9 @@
         const details = typeof payload?.responseDetails === 'string' ? payload.responseDetails : '';
         const candidate = typeof payload?.responseData?.translatedText === 'string' ? payload.responseData.translatedText : '';
         const delay = retryAfter(response);
-        if ([true, 'true', 1].includes(payload?.quotaFinished) || quotaMessage(details + '\n' + candidate)) throw error('QUOTA', 'MyMemory 今日免费额度已用尽。已完成的译文已保留，请等待额度恢复后重试。', { quota: true, retryAfterMs: delay, status: 429 });
+        // Business translations may mention quotas; only provider-prefixed text is a service warning.
+        const quotaWarning = /^\s*MYMEMORY WARNING:/i.test(candidate) && quotaMessage(candidate);
+        if ([true, 'true', 1].includes(payload?.quotaFinished) || quotaMessage(details) || quotaWarning) throw error('QUOTA', 'MyMemory 今日免费额度已用尽。已完成的译文已保留，请等待额度恢复后重试。', { quota: true, retryAfterMs: delay, status: 429 });
         const httpStatus = Number(response.status || 200);
         if (response.ok === false || httpStatus >= 400) throw friendlyStatus(httpStatus, delay);
         const serviceStatus = Number(payload?.responseStatus);

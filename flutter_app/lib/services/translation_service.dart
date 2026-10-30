@@ -519,8 +519,14 @@ class TranslationService {
               ? body!['responseDetails'] as String
               : '';
           final delay = _retryAfter(response, body);
+          // translatedText is user content; quota words alone are not a service signal.
+          final candidateWarning = RegExp(
+            r'^\s*MYMEMORY WARNING\s*:',
+            caseSensitive: false,
+          ).hasMatch(candidate);
           if ([true, 'true', 1].contains(body?['quotaFinished']) ||
-              _quotaMessage.hasMatch('$details\n$candidate')) {
+              _quotaMessage.hasMatch(details) ||
+              candidateWarning && _quotaMessage.hasMatch(candidate)) {
             throw TranslationFailure(
               'QUOTA',
               'MyMemory 今日免费额度已用尽，正在切换备用翻译。',

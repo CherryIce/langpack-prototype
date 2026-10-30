@@ -210,6 +210,32 @@ test('ordinary errors and rate limits do not trigger fallback', async () => {
   }
 });
 
+test('actual primary adapter keeps successful quota-like business text on primary without opening fallback cooldown', async t => {
+  const MyMemory = require('../web/mymemory.js');
+  for (const text of ['Next available in 10 minutes', 'Out of quota', 'Daily quota reached', 'Quota exceeded', 'Free quota exhausted']) await t.test(text, async () => {
+    let primaryCalls = 0, backupCalls = 0;
+    const circuit = { until: 0 }, fallbacks = [];
+    const primary = MyMemory.createClient({ minIntervalMs: 0, maxRetries: 0, fetchImpl: async () => { primaryCalls++; return reply('', 200, { responseStatus: 200, quotaFinished: false, responseDetails: '', responseData: { translatedText: text } }); } });
+    const client = createClient({ now: () => 1000, circuit, onFallback: value => fallbacks.push(value), primary, backup: { async translate() { backupCalls++; return { text: 'Backup result', provider: 'ZTAITrans' }; } } });
+    const result = await client.translate('业务状态', 'en');
+    assert.equal(result.provider, 'MyMemory'); assert.equal(result.text, text);
+    assert.equal(primaryCalls, 1); assert.equal(backupCalls, 0); assert.equal(circuit.until, 0); assert.deepEqual(fallbacks, []);
+  });
+});
+
+test('actual primary HTTP 200 quota warning still switches the original full source to backup once', async () => {
+  const MyMemory = require('../web/mymemory.js');
+  const warning = 'MYMEMORY WARNING: YOU USED ALL AVAILABLE FREE TRANSLATIONS FOR TODAY. NEXT AVAILABLE IN 01 HOURS';
+  let primaryCalls = 0;
+  const source = '业务文案'; const backupSources = [], circuit = { until: 0 }, fallbacks = [];
+  const primary = MyMemory.createClient({ minIntervalMs: 0, maxRetries: 2, fetchImpl: async () => { primaryCalls++; return reply('', 200, { responseStatus: 200, quotaFinished: false, responseDetails: '', responseData: { translatedText: warning } }); } });
+  const client = createClient({ now: () => 1000, circuit, onFallback: value => fallbacks.push(value), primary, backup: { async translate(text) { backupSources.push(text); return { text: 'Backup result', provider: 'ZTAITrans' }; } } });
+  assert.equal((await client.translate(source, 'en')).provider, 'ZTAITrans');
+  assert.equal((await client.translate('下一条', 'en')).provider, 'ZTAITrans');
+  assert.equal(primaryCalls, 1); assert.deepEqual(backupSources, [source, '下一条']);
+  assert.equal(circuit.until, 3601000); assert.equal(fallbacks.length, 1);
+});
+
 test('cancellation before or during primary never opens a circuit or calls backup', async () => {
   let backupCalls = 0, primaryCalls = 0; const late = deferred(), circuit = { until: 0 };
   const client = createClient({ circuit, primary: { translate: async () => { primaryCalls++; return late.promise; } }, backup: { translate: async () => { backupCalls++; } } });
